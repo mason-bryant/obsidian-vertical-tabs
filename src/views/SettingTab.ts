@@ -37,10 +37,11 @@ import {
 } from "src/services/CloseTabs";
 import { runIndexedDBDiagnostic } from "src/services/IndexedDBDiagnostic";
 import { savedGroupManager } from "src/services/SavedGroups";
+import { FolderSuggest } from "./FolderSuggest";
 import { DEFAULT_SAVED_GROUPS_FOLDER } from "src/models/SavedGroup";
 
 const SAVED_GROUPS_FOLDER_DESC =
-	"Saved tab groups are stored as notes in this folder, so they sync and can be shared with everyone who uses this vault. Which groups are open is remembered separately on each device.";
+	"Saved tab groups are stored as notes in this folder, so they sync and can be shared with everyone who uses this vault. Which groups are open is remembered separately on each device. When you change the folder, you can move existing saved groups to it.";
 
 interface ToggleProps {
 	name: string;
@@ -955,21 +956,30 @@ export class ObsidianVerticalTabsSettingTab extends PluginSettingTab {
 	private displaySavedGroupsSection(parentEl: HTMLElement) {
 		const group = this.createSettingGroup(parentEl, "Saved groups");
 		this.createSetting(group, (setting) => {
-			setting
-				.setName("Folder")
-				.setDesc(SAVED_GROUPS_FOLDER_DESC)
-				.addText((text) =>
-					text
-						.setPlaceholder(DEFAULT_SAVED_GROUPS_FOLDER)
-						.setValue(this.plugin.settings.savedGroupsFolder)
-						.onChange((value) => this.setSavedGroupsFolder(value))
-				);
+			setting.setName("Folder").setDesc(SAVED_GROUPS_FOLDER_DESC);
+			this.addSavedGroupsFolderInput(setting);
+		});
+	}
+
+	// The folder is applied when the input is committed (Enter, leaving the
+	// field, or picking a suggestion), not on every keystroke.
+	private addSavedGroupsFolderInput(setting: Setting) {
+		setting.addText((text) => {
+			text.setPlaceholder(DEFAULT_SAVED_GROUPS_FOLDER).setValue(
+				this.plugin.settings.savedGroupsFolder
+			);
+			const commit = () => this.setSavedGroupsFolder(text.getValue());
+			text.inputEl.addEventListener("change", commit);
+			new FolderSuggest(this.app, text.inputEl, commit);
 		});
 	}
 
 	private setSavedGroupsFolder(folder: string) {
-		useSettings.getState().setSettings({ savedGroupsFolder: folder });
-		savedGroupManager.reindexSoon();
+		const value = folder.trim() || DEFAULT_SAVED_GROUPS_FOLDER;
+		if (value === this.plugin.settings.savedGroupsFolder) return;
+		const previous = savedGroupManager.getFolder();
+		useSettings.getState().setSettings({ savedGroupsFolder: value });
+		savedGroupManager.onFolderChanged(previous);
 	}
 
 	// Group View
@@ -1483,9 +1493,6 @@ export class ObsidianVerticalTabsSettingTab extends PluginSettingTab {
 					deduplicatePopupTabs: value as boolean,
 				});
 				break;
-			case "savedGroupsFolder":
-				this.setSavedGroupsFolder(value as string);
-				break;
 			case "continuousViewShowMetadata":
 			case "continuousViewShowBacklinks":
 				useSettings
@@ -1876,11 +1883,7 @@ export class ObsidianVerticalTabsSettingTab extends PluginSettingTab {
 					{
 						name: "Folder",
 						desc: SAVED_GROUPS_FOLDER_DESC,
-						control: {
-							type: "folder",
-							key: "savedGroupsFolder",
-							placeholder: DEFAULT_SAVED_GROUPS_FOLDER,
-						},
+						render: (setting) => this.addSavedGroupsFolderInput(setting),
 					},
 				],
 			},

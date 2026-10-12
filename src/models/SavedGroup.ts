@@ -8,7 +8,7 @@ export const SAVED_GROUP_ID_KEY = "vertical-tabs-id";
 export const SAVED_GROUP_COLOR_KEY = "vertical-tabs-color";
 export const SAVED_GROUP_ICON_KEY = "vertical-tabs-icon";
 export const SAVED_GROUP_WINDOW_KEY = "vertical-tabs-window";
-export const DEFAULT_SAVED_GROUPS_FOLDER = "Tab groups";
+export const DEFAULT_SAVED_GROUPS_FOLDER = "Vertical Tab Groups";
 
 export type SavedTabKind = "file" | "url" | "unresolved";
 

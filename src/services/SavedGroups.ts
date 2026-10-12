@@ -53,6 +53,7 @@ import { makeLeafNonEphemeral } from "./EphemeralTabs";
 import { runWithCanSplit } from "./PlatformCanSplit";
 import { isPointOnScreen } from "./Displays";
 import { useViewState } from "src/models/ViewState";
+import { useSettings } from "src/models/PluginContext";
 
 const SYNC_DELAY = 1000;
 const REINDEX_DELAY = 500;
@@ -65,6 +66,9 @@ type FrontMatter = Record<string, unknown>;
 const pathID = (path: string): SavedGroupID => `path:${path}`;
 const isPathID = (id: SavedGroupID) => id.startsWith("path:");
 const keysOf = (tabs: SavedTab[]) => tabs.map((tab) => tab.key);
+
+const isEmptyFolder = (folder: TFolder): boolean =>
+	folder.children.every((child) => child instanceof TFolder && isEmptyFolder(child));
 
 function splitFrontMatter(content: string) {
 	const info = getFrontMatterInfo(content);
@@ -148,6 +152,54 @@ class SavedGroupManager {
 		this.requestReindex();
 	}
 
+	// Called after the folder setting changed. Offers to move the saved groups
+	// left in the previous folder, since they no longer show up otherwise.
+	onFolderChanged(previous: string) {
+		const next = this.getFolder();
+		if (previous === next) return;
+		void this.enqueue(() => this.indexAll());
+		const files = this.getSavedGroupFilesToMove(previous, next);
+		if (files.length === 0) return;
+		const count = files.length;
+		const noun = count === 1 ? "saved tab group" : "saved tab groups";
+		new ConfirmModal(this.app, {
+			title: "Move saved tab groups?",
+			message: `"${previous}" has ${count} ${noun}. Move ${count === 1 ? "it" : "them"} to "${next}"? Otherwise ${count === 1 ? "it stays" : "they stay"} where ${count === 1 ? "it is" : "they are"} and won't appear until you switch the folder back.`,
+			items: files.map((file) => file.basename),
+			confirmText: "Move",
+			cancelText: "Leave them",
+			isDestructive: false,
+			onConfirm: () => void this.moveSavedGroups(previous, next),
+		}).open();
+	}
+
+	// Notes under `from`, except those already in the new folder (e.g. when it is a subfolder).
+	private getSavedGroupFilesToMove(from: string, to: string): TFile[] {
+		return this.app.vault
+			.getMarkdownFiles()
+			.filter((file) => file.path.startsWith(`${from}/`))
+			.filter((file) => !file.path.startsWith(`${to}/`));
+	}
+
+	private moveSavedGroups(from: string, to: string): Promise<void> {
+		return this.enqueue(async () => {
+			const files = this.getSavedGroupFilesToMove(from, to);
+			for (const file of files) {
+				// Keep subfolders.
+				const relativeFolder = file.parent?.path.slice(from.length) ?? "";
+				const folder = await this.ensureFolder(normalizePath(`${to}${relativeFolder}`));
+				const path = this.getAvailablePath(folder, file.basename);
+				await this.app.fileManager.renameFile(file, path);
+			}
+			const oldFolder = this.app.vault.getFolderByPath(from);
+			if (oldFolder && isEmptyFolder(oldFolder)) {
+				await this.app.fileManager.trashFile(oldFolder);
+			}
+			const noun = files.length === 1 ? "saved tab group" : "saved tab groups";
+			new Notice(`Moved ${files.length} ${noun} to "${to}"`);
+		});
+	}
+
 	/* Folder */
 
 	getFolder(): string {
@@ -162,8 +214,7 @@ class SavedGroupManager {
 		return path.endsWith(".md") && path.startsWith(`${this.getFolder()}/`);
 	}
 
-	private async ensureFolder(): Promise<string> {
-		const folder = this.getFolder();
+	private async ensureFolder(folder = this.getFolder()): Promise<string> {
 		const existing = this.app.vault.getAbstractFileByPath(folder);
 		if (!existing) {
 			await this.app.vault.createFolder(folder);
@@ -314,6 +365,12 @@ class SavedGroupManager {
 
 	private onFileRename(file: TAbstractFile, oldPath: string) {
 		if (file instanceof TFolder) {
+			// Follow the folder (or one of its parents) when it is renamed or moved.
+			const folder = this.getFolder();
+			if (folder === oldPath || folder.startsWith(`${oldPath}/`)) {
+				const savedGroupsFolder = file.path + folder.slice(oldPath.length);
+				useSettings.getState().setSettings({ savedGroupsFolder });
+			}
 			this.requestReindex();
 			return;
 		}
