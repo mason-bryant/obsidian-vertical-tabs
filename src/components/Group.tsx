@@ -14,7 +14,7 @@ import { useApp, useSettings } from "src/models/PluginContext";
 import { GroupType } from "src/models/VTWorkspace";
 import { moveTabToEnd } from "src/services/MoveTab";
 import { runWithCanSplit } from "src/services/PlatformCanSplit";
-import { WorkspaceParent } from "obsidian";
+import { Platform, WorkspaceParent } from "obsidian";
 import { EVENTS } from "src/constants/Events";
 import { DEFAULT_GROUP_TITLE } from "src/constants/Predefined";
 import {
@@ -364,6 +364,18 @@ export const Group = (props: GroupProps) => {
 						.onClick(closeSavedGroup);
 					item.VTMenuAction = "close-saved-group";
 				});
+				const isInOwnWindow = savedGroupManager.isInOwnWindow(group);
+				if (isInOwnWindow || Platform.isDesktopApp) {
+					menu.addItem((item) => {
+						item.setSection("saved-group")
+							.setTitle(isInOwnWindow ? "Move to main window" : "Move to new window")
+							.onClick(() => {
+								const window = isInOwnWindow ? "main" : "popout";
+								void savedGroupManager.moveSavedGroup(group, window);
+							});
+						item.VTMenuAction = "move-saved-group";
+					});
+				}
 				menu.addItem((item) => {
 					item.setSection("saved-group")
 						.setTitle("Delete saved group")

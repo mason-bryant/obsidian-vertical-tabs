@@ -23,15 +23,18 @@ import {
 	SAVED_GROUP_COLOR_KEY,
 	SAVED_GROUP_ICON_KEY,
 	SAVED_GROUP_ID_KEY,
+	SAVED_GROUP_WINDOW_KEY,
 	SavedGroup,
 	SavedGroupID,
 	SavedGroupPlacement,
+	SavedGroupWindow,
 	SavedTab,
 	dedupeTabs,
 	fileTabKey,
 	haveSameKeys,
 	mergeTabs,
 	parseListItemLink,
+	parseSavedGroupWindow,
 	replaceTabList,
 	sanitizeGroupName,
 	unresolvedTabKey,
@@ -98,6 +101,9 @@ class SavedGroupManager {
 	// Tab group ID -> tab keys this device last synced. Used to tell local edits
 	// apart from edits made to the note elsewhere.
 	private snapshots = new Map<Identifier, string[]>();
+	// Tab group ID -> whether it was in its own window when last checked. Used
+	// to tell when the group was moved on this device.
+	private windowModes = new Map<Identifier, boolean>();
 	// Tab groups that are being populated from a saved group; not synced yet.
 	private restoring = new Set<Identifier>();
 	private queue: Promise<void> = Promise.resolve();
@@ -216,6 +222,7 @@ class SavedGroupManager {
 			name: file.basename,
 			color: asString(frontmatter[SAVED_GROUP_COLOR_KEY]),
 			icon: asString(frontmatter[SAVED_GROUP_ICON_KEY]),
+			window: parseSavedGroupWindow(frontmatter[SAVED_GROUP_WINDOW_KEY]),
 			tabs: this.resolveTabs(body, file.path),
 		};
 	}
@@ -399,6 +406,9 @@ class SavedGroupManager {
 		for (const groupID of Array.from(this.snapshots.keys())) {
 			if (!live.has(groupID)) this.snapshots.delete(groupID);
 		}
+		for (const groupID of Array.from(this.windowModes.keys())) {
+			if (!live.has(groupID)) this.windowModes.delete(groupID);
+		}
 		// A group seen for the first time (e.g. restored on startup) is taken as-is,
 		// so a stale layout on this device does not overwrite newer remote edits.
 		for (const groupID of Object.values(openGroups)) {
@@ -409,7 +419,11 @@ class SavedGroupManager {
 			this.snapshots.set(groupID, keysOf(this.serializeGroup(group)));
 		}
 		savedGroupStore.getActions().setOpenGroups(openGroups);
-		this.recordPlacements();
+		this.recordPlacements(live, openGroups);
+	}
+
+	isInOwnWindow(group: WorkspaceParent): boolean {
+		return group.getContainer() instanceof WorkspaceWindow;
 	}
 
 	private getPlacement(group: WorkspaceParent): SavedGroupPlacement {
@@ -425,15 +439,23 @@ class SavedGroupManager {
 		};
 	}
 
-	// Remembers on this device whether each open saved group is in its own window.
-	private recordPlacements() {
-		const live = this.getLiveGroups();
-		const actions = savedGroupStore.getActions();
-		for (const [savedGroupID, groupID] of Object.entries(
-			savedGroupStore.getState().openGroups
-		)) {
+	private recordPlacements(
+		live: Map<Identifier, WorkspaceParent>,
+		openGroups: Record<SavedGroupID, Identifier>
+	) {
+		const { setPlacement } = savedGroupStore.getActions();
+		for (const [savedGroupID, groupID] of Object.entries(openGroups)) {
 			const group = live.get(groupID);
-			if (group) actions.setPlacement(savedGroupID, this.getPlacement(group));
+			if (!group || this.restoring.has(groupID)) continue;
+			const placement = this.getPlacement(group);
+			// Window bounds are per device; whether it is a window at all is shared.
+			if (placement.popout) setPlacement(savedGroupID, placement);
+			const previous = this.windowModes.get(groupID);
+			this.windowModes.set(groupID, placement.popout);
+			// A group seen for the first time keeps the note's setting, as with tabs.
+			if (previous !== undefined && previous !== placement.popout) {
+				void this.setSavedGroupWindow(savedGroupID, placement.popout ? "popout" : "main");
+			}
 		}
 	}
 
@@ -547,6 +569,9 @@ class SavedGroupManager {
 			const frontmatter: FrontMatter = { [SAVED_GROUP_ID_KEY]: id };
 			if (metadata?.color) frontmatter[SAVED_GROUP_COLOR_KEY] = metadata.color;
 			if (metadata?.icon) frontmatter[SAVED_GROUP_ICON_KEY] = metadata.icon;
+			const isPopout = this.isInOwnWindow(group);
+			const window: SavedGroupWindow = isPopout ? "popout" : "main";
+			frontmatter[SAVED_GROUP_WINDOW_KEY] = window;
 			group.children.forEach((leaf) => this.keepTab(leaf));
 			const tabs = this.formatTabs(this.serializeGroup(group), [], path);
 			const body = tabs.map((tab) => tab.line).join("\n");
@@ -558,15 +583,20 @@ class SavedGroupManager {
 				name: file.basename,
 				color: metadata?.color,
 				icon: metadata?.icon,
+				window,
 				tabs,
 			});
 			actions.link(group.id, id);
 			this.snapshots.set(group.id, keysOf(tabs));
+			this.windowModes.set(group.id, isPopout);
 			new Notice(`Saved tab group "${file.basename}"`);
 		});
 	}
 
-	openSavedGroup(savedGroupID: SavedGroupID): Promise<void> {
+	openSavedGroup(
+		savedGroupID: SavedGroupID,
+		options: { window?: SavedGroupWindow; activeKey?: string } = {}
+	): Promise<void> {
 		return this.enqueue(async () => {
 			const { openGroups, savedGroups } = savedGroupStore.getState();
 			const openGroup = this.getLiveGroups().get(openGroups[savedGroupID] ?? "");
@@ -580,15 +610,21 @@ class SavedGroupManager {
 			const id = isPathID(savedGroupID)
 				? await this.assignID(savedGroup, file)
 				: savedGroupID;
-			const { body } = splitFrontMatter(await this.app.vault.read(file));
+			const { frontmatter, body } = splitFrontMatter(await this.app.vault.read(file));
 			const tabs = this.resolveTabs(body, file.path);
+			const noteWindow = parseSavedGroupWindow(frontmatter[SAVED_GROUP_WINDOW_KEY]);
+			const bounds = savedGroupStore.getState().placements[id];
+			const window =
+				options.window ?? noteWindow ?? (bounds?.popout ? "popout" : "main");
 			const canOpenURL = !!this.app.internalPlugins.getEnabledPluginById("webviewer");
 			const openable = tabs.filter(
 				(tab) => tab.kind === "file" || (tab.kind === "url" && canOpenURL)
 			);
 
-			const placement = savedGroupStore.getState().placements[id];
-			const firstLeaf = this.createLeafInNewGroup(placement);
+			const firstLeaf = this.createLeafInNewGroup(
+				window === "popout",
+				bounds?.popout ? bounds : undefined
+			);
 			const group = firstLeaf.parent;
 			this.restoring.add(group.id);
 			savedGroupStore.getActions().link(group.id, id);
@@ -608,10 +644,23 @@ class SavedGroupManager {
 			} finally {
 				this.restoring.delete(group.id);
 				this.snapshots.set(group.id, keysOf(this.serializeGroup(group)));
+				this.windowModes.set(group.id, this.isInOwnWindow(group));
 				this.refreshOpenGroups();
 			}
-			group.selectTabIndex(0);
-			this.app.workspace.setActiveLeaf(firstLeaf, { focus: true });
+			const activeIndex = Math.max(
+				0,
+				group.children.findIndex(
+					(leaf) => this.serializeLeaf(leaf)?.key === options.activeKey
+				)
+			);
+			group.selectTabIndex(activeIndex);
+			const activeLeaf = group.children[activeIndex] ?? firstLeaf;
+			this.app.workspace.setActiveLeaf(activeLeaf, { focus: true });
+			// Record an explicit move, and the window of notes saved before it was shared.
+			// Mobile cannot open windows, so it does not change the setting.
+			if (Platform.isDesktopApp && window !== noteWindow) {
+				void this.setSavedGroupWindow(id, window);
+			}
 
 			const missing = tabs.filter((tab) => tab.kind === "unresolved").length;
 			const webTabs = tabs.filter((tab) => tab.kind === "url").length;
@@ -638,13 +687,16 @@ class SavedGroupManager {
 		}
 	}
 
-	// Opens the group in its own window if that is where it was last open.
-	// Otherwise reuses the only group if it just holds empty tabs, e.g. right
-	// after startup, or splits off a new group.
-	private createLeafInNewGroup(placement?: SavedGroupPlacement): WorkspaceLeaf {
+	// Opens a group in its own window, at its last size and position on this
+	// device if known. Otherwise reuses the only group in the main window if it
+	// just holds empty tabs, e.g. right after startup, or splits off a new group.
+	private createLeafInNewGroup(
+		popout: boolean,
+		bounds?: SavedGroupPlacement
+	): WorkspaceLeaf {
 		const { workspace } = this.app;
-		if (placement?.popout && Platform.isDesktopApp) {
-			const { x, y, width, height } = placement;
+		if (popout && Platform.isDesktopApp) {
+			const { x, y, width, height } = bounds ?? {};
 			const data: WorkspaceWindowInitData = {};
 			// Screen coordinates span all monitors, so this also restores the monitor.
 			// If that monitor is gone, let Obsidian pick a position.
@@ -695,13 +747,25 @@ class SavedGroupManager {
 	async closeGroup(group: WorkspaceParent) {
 		const savedGroup = savedGroupStore.getActions().getSavedGroupOf(group.id);
 		if (savedGroup) {
-			savedGroupStore
-				.getActions()
-				.setPlacement(savedGroup.id, this.getPlacement(group));
+			const placement = this.getPlacement(group);
+			if (placement.popout) {
+				savedGroupStore.getActions().setPlacement(savedGroup.id, placement);
+			}
 			await this.enqueue(() => this.syncGroup(savedGroup.id, group));
 		}
 		this.snapshots.delete(group.id);
 		group.detach();
+	}
+
+	// Moves an open saved group to its own window or back to the main window.
+	// The tabs are reopened there, and every device opens the group there from now on.
+	async moveSavedGroup(group: WorkspaceParent, window: SavedGroupWindow) {
+		const savedGroup = savedGroupStore.getActions().getSavedGroupOf(group.id);
+		if (!savedGroup) return;
+		const activeLeaf = group.children[group.currentTab];
+		const activeKey = activeLeaf ? this.serializeLeaf(activeLeaf)?.key : undefined;
+		await this.closeGroup(group);
+		await this.openSavedGroup(savedGroup.id, { window, activeKey });
 	}
 
 	deleteSavedGroup(savedGroupID: SavedGroupID): Promise<void> {
@@ -769,12 +833,23 @@ class SavedGroupManager {
 		return this.updateAppearance(savedGroupID, "icon", icon);
 	}
 
+	private setSavedGroupWindow(savedGroupID: SavedGroupID, window: SavedGroupWindow) {
+		const savedGroup = savedGroupStore.getState().savedGroups[savedGroupID];
+		if (savedGroup?.window === window) return Promise.resolve();
+		return this.updateAppearance(savedGroupID, "window", window);
+	}
+
 	private updateAppearance(
 		savedGroupID: SavedGroupID,
-		property: "color" | "icon",
+		property: "color" | "icon" | "window",
 		value: string | undefined
 	): Promise<void> {
-		const key = property === "color" ? SAVED_GROUP_COLOR_KEY : SAVED_GROUP_ICON_KEY;
+		const keys = {
+			color: SAVED_GROUP_COLOR_KEY,
+			icon: SAVED_GROUP_ICON_KEY,
+			window: SAVED_GROUP_WINDOW_KEY,
+		};
+		const key = keys[property];
 		return this.enqueue(async () => {
 			const savedGroup = savedGroupStore.getState().savedGroups[savedGroupID];
 			const file = savedGroup && this.app.vault.getFileByPath(savedGroup.path);

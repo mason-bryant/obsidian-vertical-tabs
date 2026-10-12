@@ -7,6 +7,7 @@ export type SavedGroupID = string;
 export const SAVED_GROUP_ID_KEY = "vertical-tabs-id";
 export const SAVED_GROUP_COLOR_KEY = "vertical-tabs-color";
 export const SAVED_GROUP_ICON_KEY = "vertical-tabs-icon";
+export const SAVED_GROUP_WINDOW_KEY = "vertical-tabs-window";
 export const DEFAULT_SAVED_GROUPS_FOLDER = "Tab groups";
 
 export type SavedTabKind = "file" | "url" | "unresolved";
@@ -21,16 +22,25 @@ export interface SavedTab {
 	line?: string;
 }
 
+// Whether a saved group opens in the main window or in its own window.
+// Shared through the note, so every device opens it the same way.
+export type SavedGroupWindow = "main" | "popout";
+
+export function parseSavedGroupWindow(value: unknown): SavedGroupWindow | undefined {
+	return value === "main" || value === "popout" ? value : undefined;
+}
+
 export interface SavedGroup {
 	id: SavedGroupID;
 	path: string;
 	name: string;
 	color?: string;
 	icon?: string;
+	window?: SavedGroupWindow;
 	tabs: SavedTab[];
 }
 
-// Where a saved group was last open on this device.
+// Size and position of the window a saved group was last in on this device.
 export interface SavedGroupPlacement {
 	popout: boolean;
 	x?: number;
