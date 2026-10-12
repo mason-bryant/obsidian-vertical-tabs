@@ -8,6 +8,7 @@ export const SAVED_GROUP_ID_KEY = "vertical-tabs-id";
 export const SAVED_GROUP_COLOR_KEY = "vertical-tabs-color";
 export const SAVED_GROUP_ICON_KEY = "vertical-tabs-icon";
 export const SAVED_GROUP_WINDOW_KEY = "vertical-tabs-window";
+export const SAVED_GROUP_NAME_KEY = "vertical-tabs-name";
 export const DEFAULT_SAVED_GROUPS_FOLDER = "Vertical Tab Groups";
 
 export type SavedTabKind = "file" | "url" | "unresolved";
@@ -34,6 +35,9 @@ export interface SavedGroup {
 	id: SavedGroupID;
 	path: string;
 	name: string;
+	// The exact name, stored in the note when the file name cannot hold it
+	// (punctuation such as ":" or "/", or a numbered duplicate).
+	noteName?: string;
 	color?: string;
 	icon?: string;
 	window?: SavedGroupWindow;
@@ -198,6 +202,25 @@ export function replaceTabList(body: string, lines: string[]): string {
 
 // Characters that are invalid in file names or that break wiki links.
 const INVALID_NAME_CHARS = /[\\/:*?"<>|#^[\]]/g;
+
+// The file name (without extension) used for a group name.
+export function fileNameForGroup(name: string, fallback: string): string {
+	return sanitizeGroupName(name) || fallback;
+}
+
+// The name to show: the exact name stored in the note, unless the file was
+// renamed since (e.g. in the file explorer), in which case the file name wins.
+export function resolveGroupName(
+	noteName: string | undefined,
+	basename: string,
+	fallback: string
+): string {
+	if (!noteName) return basename;
+	const base = fileNameForGroup(noteName, fallback);
+	if (basename === base) return noteName;
+	const suffix = basename.startsWith(`${base} `) ? basename.slice(base.length + 1) : "";
+	return /^\d+$/.test(suffix) ? noteName : basename;
+}
 
 export function sanitizeGroupName(name: string): string {
 	return name

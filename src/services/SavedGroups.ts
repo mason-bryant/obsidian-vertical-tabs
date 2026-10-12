@@ -23,6 +23,7 @@ import {
 	SAVED_GROUP_COLOR_KEY,
 	SAVED_GROUP_ICON_KEY,
 	SAVED_GROUP_ID_KEY,
+	SAVED_GROUP_NAME_KEY,
 	SAVED_GROUP_WINDOW_KEY,
 	SavedGroup,
 	SavedGroupID,
@@ -35,6 +36,7 @@ import {
 	mergeTabs,
 	parseListItemLink,
 	parseSavedGroupWindow,
+	resolveGroupName,
 	replaceTabList,
 	sanitizeGroupName,
 	unresolvedTabKey,
@@ -66,6 +68,9 @@ type FrontMatter = Record<string, unknown>;
 const pathID = (path: string): SavedGroupID => `path:${path}`;
 const isPathID = (id: SavedGroupID) => id.startsWith("path:");
 const keysOf = (tabs: SavedTab[]) => tabs.map((tab) => tab.key);
+
+const basenameOf = (path: string) =>
+	(path.split("/").pop() ?? path).replace(/\.md$/, "");
 
 const isEmptyFolder = (folder: TFolder): boolean =>
 	folder.children.every((child) => child instanceof TFolder && isEmptyFolder(child));
@@ -165,12 +170,19 @@ class SavedGroupManager {
 		new ConfirmModal(this.app, {
 			title: "Move saved tab groups?",
 			message: `"${previous}" has ${count} ${noun}. Move ${count === 1 ? "it" : "them"} to "${next}"? Otherwise ${count === 1 ? "it stays" : "they stay"} where ${count === 1 ? "it is" : "they are"} and won't appear until you switch the folder back.`,
-			items: files.map((file) => file.basename),
+			items: files.map((file) => this.getNameOfNote(file)),
 			confirmText: "Move",
 			cancelText: "Leave them",
 			isDestructive: false,
 			onConfirm: () => void this.moveSavedGroups(previous, next),
 		}).open();
+	}
+
+	private getNameOfNote(file: TFile): string {
+		const noteName = asString(
+			this.app.metadataCache.getFileCache(file)?.frontmatter?.[SAVED_GROUP_NAME_KEY]
+		);
+		return resolveGroupName(noteName, file.basename, DEFAULT_GROUP_TITLE);
 	}
 
 	// Notes under `from`, except those already in the new folder (e.g. when it is a subfolder).
@@ -267,10 +279,12 @@ class SavedGroupManager {
 
 	private parseSavedGroup(file: TFile, content: string): SavedGroup {
 		const { frontmatter, body } = splitFrontMatter(content);
+		const noteName = asString(frontmatter[SAVED_GROUP_NAME_KEY]);
 		return {
 			id: asString(frontmatter[SAVED_GROUP_ID_KEY]) ?? pathID(file.path),
 			path: file.path,
-			name: file.basename,
+			name: resolveGroupName(noteName, file.basename, DEFAULT_GROUP_TITLE),
+			noteName,
 			color: asString(frontmatter[SAVED_GROUP_COLOR_KEY]),
 			icon: asString(frontmatter[SAVED_GROUP_ICON_KEY]),
 			window: parseSavedGroupWindow(frontmatter[SAVED_GROUP_WINDOW_KEY]),
@@ -382,7 +396,8 @@ class SavedGroupManager {
 				(savedGroup) => savedGroup.path === oldPath
 			);
 			if (existing && isSavedGroup) {
-				actions.setSavedGroup({ ...existing, path: file.path, name: file.basename });
+				const name = resolveGroupName(existing.noteName, file.basename, DEFAULT_GROUP_TITLE);
+				actions.setSavedGroup({ ...existing, path: file.path, name });
 			} else {
 				actions.removeSavedGroupAtPath(oldPath);
 			}
@@ -620,10 +635,13 @@ class SavedGroupManager {
 			const actions = savedGroupStore.getActions();
 			if (actions.isGroupSaved(group.id)) return;
 			const folder = await this.ensureFolder();
-			const path = this.getAvailablePath(folder, name);
+			const displayName = name.trim() || DEFAULT_GROUP_TITLE;
+			const path = this.getAvailablePath(folder, displayName);
+			const noteName = basenameOf(path) === displayName ? undefined : displayName;
 			const metadata = tabCacheStore.getState().groupMetadata.get(group.id);
 			const id = nanoid();
 			const frontmatter: FrontMatter = { [SAVED_GROUP_ID_KEY]: id };
+			if (noteName) frontmatter[SAVED_GROUP_NAME_KEY] = noteName;
 			if (metadata?.color) frontmatter[SAVED_GROUP_COLOR_KEY] = metadata.color;
 			if (metadata?.icon) frontmatter[SAVED_GROUP_ICON_KEY] = metadata.icon;
 			const isPopout = this.isInOwnWindow(group);
@@ -637,7 +655,8 @@ class SavedGroupManager {
 			actions.setSavedGroup({
 				id,
 				path: file.path,
-				name: file.basename,
+				name: displayName,
+				noteName,
 				color: metadata?.color,
 				icon: metadata?.icon,
 				window,
@@ -646,7 +665,7 @@ class SavedGroupManager {
 			actions.link(group.id, id);
 			this.snapshots.set(group.id, keysOf(tabs));
 			this.windowModes.set(group.id, isPopout);
-			new Notice(`Saved tab group "${file.basename}"`);
+			new Notice(`Saved tab group "${displayName}"`);
 		});
 	}
 
@@ -875,9 +894,20 @@ class SavedGroupManager {
 		return this.enqueue(async () => {
 			const savedGroup = savedGroupStore.getState().savedGroups[savedGroupID];
 			const file = savedGroup && this.app.vault.getFileByPath(savedGroup.path);
-			if (!file || !sanitizeGroupName(name)) return;
+			const displayName = name.trim();
+			if (!savedGroup || !file || !displayName) return;
 			const folder = file.parent?.path ?? this.getFolder();
-			const path = this.getAvailablePath(folder, name, file.path);
+			const path = this.getAvailablePath(folder, displayName, file.path);
+			const noteName = basenameOf(path) === displayName ? undefined : displayName;
+			savedGroupStore
+				.getActions()
+				.setSavedGroup({ ...savedGroup, name: displayName, noteName });
+			if (noteName !== savedGroup.noteName) {
+				await this.app.fileManager.processFrontMatter(file, (frontmatter: FrontMatter) => {
+					if (noteName) frontmatter[SAVED_GROUP_NAME_KEY] = noteName;
+					else delete frontmatter[SAVED_GROUP_NAME_KEY];
+				});
+			}
 			if (path !== file.path) await this.app.fileManager.renameFile(file, path);
 		});
 	}
