@@ -6,4 +6,5 @@ export const STORAGE_KEYS = {
 	VERSION_CACHE: "vertical-tabs:version-cache",
 	SAVED_GROUP_LINKS: "vertical-tabs:saved-group-links",
 	SAVED_GROUPS_COLLAPSED: "vertical-tabs:saved-groups-collapsed",
+	SAVED_GROUP_PLACEMENTS: "vertical-tabs:saved-group-placements",
 } as const;

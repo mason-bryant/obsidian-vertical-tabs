@@ -6,12 +6,15 @@ import {
 	normalizePath,
 	Notice,
 	parseYaml,
+	Platform,
 	stringifyYaml,
 	TAbstractFile,
 	TFile,
 	TFolder,
 	WorkspaceLeaf,
 	WorkspaceParent,
+	WorkspaceWindow,
+	WorkspaceWindowInitData,
 } from "obsidian";
 import { nanoid } from "nanoid";
 import ObsidianVerticalTabs from "src/main";
@@ -22,6 +25,7 @@ import {
 	SAVED_GROUP_ID_KEY,
 	SavedGroup,
 	SavedGroupID,
+	SavedGroupPlacement,
 	SavedTab,
 	dedupeTabs,
 	fileTabKey,
@@ -44,10 +48,12 @@ import { SavedGroupSuggestModal } from "src/views/SavedGroupSuggestModal";
 import { iterateRootOrFloatingLeaves } from "./GetTabs";
 import { makeLeafNonEphemeral } from "./EphemeralTabs";
 import { runWithCanSplit } from "./PlatformCanSplit";
+import { isPointOnScreen } from "./Displays";
 import { useViewState } from "src/models/ViewState";
 
 const SYNC_DELAY = 1000;
 const REINDEX_DELAY = 500;
+const PLACEMENT_INTERVAL = 1000;
 
 type FrontMatter = Record<string, unknown>;
 
@@ -259,6 +265,9 @@ class SavedGroupManager {
 		plugin.registerEvent(
 			workspace.on("file-open", () => this.onLayoutChange())
 		);
+		plugin.registerInterval(
+			window.setInterval(() => this.recordPopoutPlacements(), PLACEMENT_INTERVAL)
+		);
 		plugin.registerEvent(vault.on("create", (file) => this.onFileChange(file)));
 		plugin.registerEvent(vault.on("modify", (file) => this.onFileChange(file)));
 		plugin.registerEvent(vault.on("delete", (file) => this.onFileDelete(file)));
@@ -400,6 +409,48 @@ class SavedGroupManager {
 			this.snapshots.set(groupID, keysOf(this.serializeGroup(group)));
 		}
 		savedGroupStore.getActions().setOpenGroups(openGroups);
+		this.recordPlacements();
+	}
+
+	private getPlacement(group: WorkspaceParent): SavedGroupPlacement {
+		const container = group.getContainer();
+		if (!(container instanceof WorkspaceWindow)) return { popout: false };
+		const { screenX, screenY, outerWidth, outerHeight } = container.win;
+		return {
+			popout: true,
+			x: screenX,
+			y: screenY,
+			width: outerWidth,
+			height: outerHeight,
+		};
+	}
+
+	// Remembers on this device whether each open saved group is in its own window.
+	private recordPlacements() {
+		const live = this.getLiveGroups();
+		const actions = savedGroupStore.getActions();
+		for (const [savedGroupID, groupID] of Object.entries(
+			savedGroupStore.getState().openGroups
+		)) {
+			const group = live.get(groupID);
+			if (group) actions.setPlacement(savedGroupID, this.getPlacement(group));
+		}
+	}
+
+	// Moving a window fires no event, and a closing window is already detached
+	// when Obsidian reports it, so the bounds of saved groups in their own
+	// windows are checked periodically instead. Only changes are stored.
+	private recordPopoutPlacements() {
+		if (!this.isReady) return;
+		const { getSavedGroupOf, setPlacement } = savedGroupStore.getActions();
+		const seen = new Set<Identifier>();
+		this.app.workspace.iterateLeaves(this.app.workspace.floatingSplit, (leaf) => {
+			const group = leaf.parent;
+			if (!group || seen.has(group.id)) return;
+			seen.add(group.id);
+			const savedGroup = getSavedGroupOf(group.id);
+			if (savedGroup) setPlacement(savedGroup.id, this.getPlacement(group));
+		});
 	}
 
 	private async syncAll() {
@@ -536,7 +587,8 @@ class SavedGroupManager {
 				(tab) => tab.kind === "file" || (tab.kind === "url" && canOpenURL)
 			);
 
-			const firstLeaf = this.createLeafInNewGroup();
+			const placement = savedGroupStore.getState().placements[id];
+			const firstLeaf = this.createLeafInNewGroup(placement);
 			const group = firstLeaf.parent;
 			this.restoring.add(group.id);
 			savedGroupStore.getActions().link(group.id, id);
@@ -586,9 +638,23 @@ class SavedGroupManager {
 		}
 	}
 
-	// Reuses the only group if it just holds empty tabs, e.g. right after startup.
-	private createLeafInNewGroup(): WorkspaceLeaf {
+	// Opens the group in its own window if that is where it was last open.
+	// Otherwise reuses the only group if it just holds empty tabs, e.g. right
+	// after startup, or splits off a new group.
+	private createLeafInNewGroup(placement?: SavedGroupPlacement): WorkspaceLeaf {
 		const { workspace } = this.app;
+		if (placement?.popout && Platform.isDesktopApp) {
+			const { x, y, width, height } = placement;
+			const data: WorkspaceWindowInitData = {};
+			// Screen coordinates span all monitors, so this also restores the monitor.
+			// If that monitor is gone, let Obsidian pick a position.
+			if (x !== undefined && y !== undefined && isPointOnScreen(x, y)) {
+				data.x = x;
+				data.y = y;
+			}
+			if (width && height) data.size = { width, height };
+			return workspace.openPopoutLeaf(data);
+		}
 		const groups = new Map<Identifier, WorkspaceParent>();
 		workspace.iterateLeaves(workspace.rootSplit, (leaf) => {
 			groups.set(leaf.parent.id, leaf.parent);
@@ -603,7 +669,13 @@ class SavedGroupManager {
 			rest.forEach((leaf) => leaf.detach());
 			if (first) return first;
 		}
-		return runWithCanSplit(() => workspace.getLeaf("split"));
+		// Split off the main window even when the focus is in a popout window.
+		const anchor = workspace.getMostRecentLeaf(workspace.rootSplit);
+		return runWithCanSplit(() =>
+			anchor
+				? workspace.createLeafBySplit(anchor, "vertical")
+				: workspace.getLeaf("split")
+		);
 	}
 
 	private focusGroup(group: WorkspaceParent) {
@@ -623,6 +695,9 @@ class SavedGroupManager {
 	async closeGroup(group: WorkspaceParent) {
 		const savedGroup = savedGroupStore.getActions().getSavedGroupOf(group.id);
 		if (savedGroup) {
+			savedGroupStore
+				.getActions()
+				.setPlacement(savedGroup.id, this.getPlacement(group));
 			await this.enqueue(() => this.syncGroup(savedGroup.id, group));
 		}
 		this.snapshots.delete(group.id);
@@ -642,6 +717,7 @@ class SavedGroupManager {
 			const actions = savedGroupStore.getActions();
 			actions.unlink(savedGroupID);
 			actions.removeSavedGroup(savedGroupID);
+			actions.removePlacement(savedGroupID);
 			const file = this.app.vault.getFileByPath(savedGroup.path);
 			if (file) await this.app.fileManager.trashFile(file);
 			new Notice(`Deleted saved tab group "${savedGroup.name}"`);
