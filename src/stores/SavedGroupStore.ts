@@ -1,0 +1,135 @@
+import { useStoreWithActions } from "src/models/StoreWithActions";
+import { Identifier } from "src/models/VTWorkspace";
+import { SavedGroup, SavedGroupID } from "src/models/SavedGroup";
+import { STORAGE_KEYS } from "src/constants/StorageKeys";
+import { localStorageService } from "./LocalStorageService";
+
+// Saved groups themselves live in the vault and are shared. Which of them are
+// open, and in which tab group, is per device and lives in local storage.
+interface SavedGroupState {
+	savedGroups: Record<SavedGroupID, SavedGroup>;
+	// Tab group ID -> saved group ID. May contain groups that are not open anymore,
+	// e.g. groups in another workspace layout, so they reconnect when restored.
+	links: Record<Identifier, SavedGroupID>;
+	// Saved group ID -> tab group ID, only for groups that are currently open.
+	openGroups: Record<SavedGroupID, Identifier>;
+	isListCollapsed: boolean;
+}
+
+interface SavedGroupActions {
+	hydrate: () => void;
+	setSavedGroup: (savedGroup: SavedGroup) => void;
+	removeSavedGroup: (id: SavedGroupID) => void;
+	removeSavedGroupAtPath: (path: string) => void;
+	link: (groupID: Identifier, savedGroupID: SavedGroupID) => void;
+	unlink: (savedGroupID: SavedGroupID) => void;
+	setOpenGroups: (openGroups: Record<SavedGroupID, Identifier>) => void;
+	toggleListCollapsed: () => void;
+	getSavedGroupOf: (groupID: Identifier) => SavedGroup | undefined;
+	isGroupSaved: (groupID: Identifier) => boolean;
+}
+
+type SavedGroupStore = SavedGroupState & { actions: SavedGroupActions };
+
+const saveLinks = (links: Record<Identifier, SavedGroupID>) =>
+	localStorageService.save(STORAGE_KEYS.SAVED_GROUP_LINKS, links);
+
+const sameRecord = (a: Record<string, string>, b: Record<string, string>) => {
+	const aKeys = Object.keys(a);
+	return (
+		aKeys.length === Object.keys(b).length &&
+		aKeys.every((key) => a[key] === b[key])
+	);
+};
+
+export const savedGroupStore = useStoreWithActions<SavedGroupStore>(
+	(set, get) => ({
+		savedGroups: {},
+		links: {},
+		openGroups: {},
+		isListCollapsed: false,
+		actions: {
+			hydrate: () => {
+				const links =
+					localStorageService.load<Record<Identifier, SavedGroupID>>(
+						STORAGE_KEYS.SAVED_GROUP_LINKS
+					) ?? {};
+				const isListCollapsed =
+					localStorageService.load<boolean>(
+						STORAGE_KEYS.SAVED_GROUPS_COLLAPSED
+					) ?? false;
+				set({ links, isListCollapsed });
+			},
+			setSavedGroup: (savedGroup) => {
+				set((state) => {
+					const savedGroups = { ...state.savedGroups };
+					// The same note may have been indexed under another ID before.
+					for (const [id, existing] of Object.entries(savedGroups)) {
+						if (existing.path === savedGroup.path) delete savedGroups[id];
+					}
+					savedGroups[savedGroup.id] = savedGroup;
+					return { savedGroups };
+				});
+			},
+			removeSavedGroup: (id) => {
+				set((state) => {
+					if (!state.savedGroups[id]) return state;
+					const savedGroups = { ...state.savedGroups };
+					delete savedGroups[id];
+					return { savedGroups };
+				});
+			},
+			removeSavedGroupAtPath: (path) => {
+				const entry = Object.values(get().savedGroups).find(
+					(savedGroup) => savedGroup.path === path
+				);
+				if (entry) get().actions.removeSavedGroup(entry.id);
+			},
+			link: (groupID, savedGroupID) => {
+				const links = Object.fromEntries(
+					Object.entries(get().links).filter(
+						([, id]) => id !== savedGroupID
+					)
+				);
+				links[groupID] = savedGroupID;
+				saveLinks(links);
+				set((state) => ({
+					links,
+					openGroups: { ...state.openGroups, [savedGroupID]: groupID },
+				}));
+			},
+			unlink: (savedGroupID) => {
+				const links = Object.fromEntries(
+					Object.entries(get().links).filter(
+						([, id]) => id !== savedGroupID
+					)
+				);
+				saveLinks(links);
+				set((state) => {
+					const openGroups = { ...state.openGroups };
+					delete openGroups[savedGroupID];
+					return { links, openGroups };
+				});
+			},
+			setOpenGroups: (openGroups) => {
+				if (sameRecord(openGroups, get().openGroups)) return;
+				set({ openGroups });
+			},
+			toggleListCollapsed: () => {
+				const isListCollapsed = !get().isListCollapsed;
+				localStorageService.save(
+					STORAGE_KEYS.SAVED_GROUPS_COLLAPSED,
+					isListCollapsed
+				);
+				set({ isListCollapsed });
+			},
+			getSavedGroupOf: (groupID) => {
+				const { links, savedGroups } = get();
+				const savedGroupID = links[groupID];
+				return savedGroupID ? savedGroups[savedGroupID] : undefined;
+			},
+			isGroupSaved: (groupID) =>
+				!!get().actions.getSavedGroupOf(groupID),
+		},
+	})
+);
