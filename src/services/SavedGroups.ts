@@ -728,9 +728,10 @@ class SavedGroupManager {
 		const savedGroup = savedGroupStore.getState().savedGroups[savedGroupID];
 		if (!savedGroup) return;
 		const isOpen = !!savedGroupStore.getState().openGroups[savedGroupID];
+		const listFile = `"${savedGroup.path}"`;
 		const message = isOpen
-			? `"${savedGroup.name}" will no longer be saved. Its tabs stay open. The group's note is moved to the trash for everyone who shares this vault.`
-			: `"${savedGroup.name}" will be deleted. The group's note is moved to the trash for everyone who shares this vault.`;
+			? `"${savedGroup.name}" will no longer be saved. Its tabs stay open, and the notes in it are not changed. Only the group's list, ${listFile}, is moved to the trash, which removes the saved group for everyone who shares this vault.`
+			: `"${savedGroup.name}" will be removed from your saved groups. The notes in it are not changed. Only the group's list, ${listFile}, is moved to the trash, which removes the saved group for everyone who shares this vault.`;
 		new ConfirmModal(this.app, {
 			title: "Delete saved tab group?",
 			message,
