@@ -15,6 +15,7 @@ import { safeDetach } from "./CloseTabs";
 import { linkTasksStore } from "src/stores/LinkTaskStore";
 import { tabCacheStore } from "src/stores/TabCacheStore";
 import { isMobileDrawerOpen } from "./MobileDrawer";
+import { savedGroupStore } from "src/stores/SavedGroupStore";
 
 const INCLUDE_LIST = new Set([
 	"markdown",
@@ -126,11 +127,14 @@ export function deduplicateTab(
 	const targetLeaves: WorkspaceLeaf[] = [];
 	const options = useSettings.getState() as DeduplicateOptions;
 	const skipLeaves = getLeaveIDsControlledByHoverEditor(app);
+	const { isGroupSaved } = savedGroupStore.getActions();
 	iterateTabs(app, options, (leaf) => {
 		if (skipLeaves.includes(leaf.id)) return;
 		const viewType = leaf.view.getViewType();
 		if (!INCLUDE_LIST.has(viewType)) return;
 		if (leaf.parent?.isLinkedGroup && leaf.isLinkedFile) return;
+		// Deduplicating would silently remove tabs from saved groups.
+		if (leaf.parent && isGroupSaved(leaf.parent.id)) return;
 		const openFile = getOpenFileOfLeaf(app, leaf);
 		if (openFile === file) targetLeaves.push(leaf);
 	});

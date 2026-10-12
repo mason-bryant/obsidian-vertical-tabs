@@ -44,6 +44,7 @@ import { ViewEphemeralState } from "obsidian-typings";
 import { applyTabTitle } from "./services/Customization";
 import { localStorageService } from "./stores/LocalStorageService";
 import { metadataService } from "./stores/TabMetadataService";
+import { savedGroupManager } from "./services/SavedGroups";
 import {
 	disableUniversalCanSplit,
 	enableUniversalCanSplit,
@@ -71,6 +72,7 @@ export default class ObsidianVerticalTabs extends Plugin {
 		}
 		await this.registerEventsAndViews();
 		await this.setupCommands();
+		savedGroupManager.init(this);
 		await this.updateViewStates();
 		await this.patchViews();
 		this.addSettingTab(new ObsidianVerticalTabsSettingTab(this.app, this));

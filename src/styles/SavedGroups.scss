@@ -1,0 +1,77 @@
+.obsidian-vertical-tabs-container {
+	// Keep the name and controls of a saved group visible when it is the only group.
+	.tree-item.is-group.is-single-group.is-saved-group > .tree-item-self {
+		display: flex;
+	}
+
+	.vt-saved-group-title {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--size-4-1);
+		max-width: 100%;
+	}
+
+	.vt-saved-group-badge {
+		display: inline-flex;
+		flex-shrink: 0;
+		color: var(--text-faint);
+
+		svg {
+			width: var(--icon-xs);
+			height: var(--icon-xs);
+		}
+	}
+
+	.vt-saved-groups {
+		border-top: 1px solid var(--background-modifier-border);
+		margin-top: 10px;
+		padding-top: var(--size-4-1);
+
+		.vt-saved-groups-header {
+			color: var(--text-muted);
+			font-size: var(--font-ui-smaller);
+			font-weight: var(--font-semibold);
+
+			.collapse-icon svg {
+				width: 10px;
+				height: 10px;
+				stroke-width: 2px;
+				transition: transform 100ms ease-in-out;
+			}
+		}
+
+		&.is-collapsed .vt-saved-groups-header .collapse-icon svg {
+			transform: rotate(calc(var(--direction) * -1 * 90deg));
+		}
+
+		.vt-saved-group {
+			margin-bottom: 0;
+
+			.tree-item-self {
+				color: var(--text-muted);
+			}
+
+			.tree-item-icon svg {
+				width: var(--icon-xs);
+				height: var(--icon-xs);
+			}
+
+			.tree-item-flair-outer {
+				align-items: center;
+			}
+
+			.clickable-icon[data-action="delete-saved-group"] {
+				visibility: hidden;
+			}
+
+			.tree-item-self:hover .clickable-icon[data-action="delete-saved-group"] {
+				visibility: visible;
+			}
+		}
+	}
+}
+
+.vt-saved-group-suggestion-note {
+	color: var(--text-faint);
+	font-size: var(--font-ui-smaller);
+}

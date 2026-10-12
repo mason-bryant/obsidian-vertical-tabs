@@ -30,6 +30,7 @@ import { WorkspaceLeaf } from "obsidian";
 import { makeLeafNonEphemeral } from "src/services/EphemeralTabs";
 import { TabSlot } from "./TabSlot";
 import { useTabSelection } from "src/stores/TabSelectionStore";
+import { SavedGroupList } from "./SavedGroupList";
 
 export const NavigationContent = () => {
 	const groupIDs = tabCacheStore((state) => state.groupIDs);
@@ -206,6 +207,7 @@ export const NavigationContent = () => {
 					{createPortal(<DragOverlay />, activeDocument.body)}
 				</DndContext>
 			</div>
+			<SavedGroupList />
 		</div>
 	);
 };

@@ -35,6 +35,7 @@
 @use "styles/Customization.scss";
 @use "styles/IconSelectionModal.scss";
 @use "styles/ResetModal.scss";
+@use "styles/SavedGroups.scss";
 
 .obsidian-vertical-tabs-container .tree-item.is-tab .tree-item-icon svg {
 	width: var(--icon-xs);
