@@ -5,8 +5,10 @@ import {
 } from "src/constants/Predefined";
 import { tabCacheStore } from "src/stores/TabCacheStore";
 import { Identifier } from "src/models/VTWorkspace";
+import { savedGroupStore } from "src/stores/SavedGroupStore";
 
 export const getGroupTitle = (groupId: Identifier) =>
+	savedGroupStore.getActions().getSavedGroupOf(groupId)?.name ??
 	tabCacheStore.getState().groupMetadata.get(groupId)?.title ??
 	DEFAULT_GROUP_TITLE;
 
