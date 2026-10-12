@@ -30,6 +30,25 @@ export interface SavedGroup {
 	tabs: SavedTab[];
 }
 
+// Where a saved group was last open on this device.
+export interface SavedGroupPlacement {
+	popout: boolean;
+	x?: number;
+	y?: number;
+	width?: number;
+	height?: number;
+}
+
+export function isSamePlacement(a?: SavedGroupPlacement, b?: SavedGroupPlacement) {
+	return (
+		a?.popout === b?.popout &&
+		a?.x === b?.x &&
+		a?.y === b?.y &&
+		a?.width === b?.width &&
+		a?.height === b?.height
+	);
+}
+
 export type ParsedLink =
 	| { type: "internal"; linkpath: string }
 	| { type: "url"; url: string; title?: string };

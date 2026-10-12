@@ -1,6 +1,11 @@
 import { useStoreWithActions } from "src/models/StoreWithActions";
 import { Identifier } from "src/models/VTWorkspace";
-import { SavedGroup, SavedGroupID } from "src/models/SavedGroup";
+import {
+	isSamePlacement,
+	SavedGroup,
+	SavedGroupID,
+	SavedGroupPlacement,
+} from "src/models/SavedGroup";
 import { STORAGE_KEYS } from "src/constants/StorageKeys";
 import { localStorageService } from "./LocalStorageService";
 
@@ -13,6 +18,8 @@ interface SavedGroupState {
 	links: Record<Identifier, SavedGroupID>;
 	// Saved group ID -> tab group ID, only for groups that are currently open.
 	openGroups: Record<SavedGroupID, Identifier>;
+	// Saved group ID -> where it was last open on this device, so it reopens there.
+	placements: Record<SavedGroupID, SavedGroupPlacement>;
 	isListCollapsed: boolean;
 }
 
@@ -24,6 +31,8 @@ interface SavedGroupActions {
 	link: (groupID: Identifier, savedGroupID: SavedGroupID) => void;
 	unlink: (savedGroupID: SavedGroupID) => void;
 	setOpenGroups: (openGroups: Record<SavedGroupID, Identifier>) => void;
+	setPlacement: (id: SavedGroupID, placement: SavedGroupPlacement) => void;
+	removePlacement: (id: SavedGroupID) => void;
 	toggleListCollapsed: () => void;
 	getSavedGroupOf: (groupID: Identifier) => SavedGroup | undefined;
 	isGroupSaved: (groupID: Identifier) => boolean;
@@ -33,6 +42,9 @@ type SavedGroupStore = SavedGroupState & { actions: SavedGroupActions };
 
 const saveLinks = (links: Record<Identifier, SavedGroupID>) =>
 	localStorageService.save(STORAGE_KEYS.SAVED_GROUP_LINKS, links);
+
+const savePlacements = (placements: Record<SavedGroupID, SavedGroupPlacement>) =>
+	localStorageService.save(STORAGE_KEYS.SAVED_GROUP_PLACEMENTS, placements);
 
 const sameRecord = (a: Record<string, string>, b: Record<string, string>) => {
 	const aKeys = Object.keys(a);
@@ -47,6 +59,7 @@ export const savedGroupStore = useStoreWithActions<SavedGroupStore>(
 		savedGroups: {},
 		links: {},
 		openGroups: {},
+		placements: {},
 		isListCollapsed: false,
 		actions: {
 			hydrate: () => {
@@ -54,11 +67,15 @@ export const savedGroupStore = useStoreWithActions<SavedGroupStore>(
 					localStorageService.load<Record<Identifier, SavedGroupID>>(
 						STORAGE_KEYS.SAVED_GROUP_LINKS
 					) ?? {};
+				const placements =
+					localStorageService.load<Record<SavedGroupID, SavedGroupPlacement>>(
+						STORAGE_KEYS.SAVED_GROUP_PLACEMENTS
+					) ?? {};
 				const isListCollapsed =
 					localStorageService.load<boolean>(
 						STORAGE_KEYS.SAVED_GROUPS_COLLAPSED
 					) ?? false;
-				set({ links, isListCollapsed });
+				set({ links, placements, isListCollapsed });
 			},
 			setSavedGroup: (savedGroup) => {
 				set((state) => {
@@ -114,6 +131,19 @@ export const savedGroupStore = useStoreWithActions<SavedGroupStore>(
 			setOpenGroups: (openGroups) => {
 				if (sameRecord(openGroups, get().openGroups)) return;
 				set({ openGroups });
+			},
+			setPlacement: (id, placement) => {
+				if (isSamePlacement(get().placements[id], placement)) return;
+				const placements = { ...get().placements, [id]: placement };
+				savePlacements(placements);
+				set({ placements });
+			},
+			removePlacement: (id) => {
+				if (!get().placements[id]) return;
+				const placements = { ...get().placements };
+				delete placements[id];
+				savePlacements(placements);
+				set({ placements });
 			},
 			toggleListCollapsed: () => {
 				const isListCollapsed = !get().isListCollapsed;
