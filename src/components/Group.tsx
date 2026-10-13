@@ -604,14 +604,26 @@ export const Group = (props: GroupProps) => {
 			title={
 				isEditing ? (
 					titleEditor
-				) : savedGroup ? (
+				) : !isSidebar && group ? (
 					<span className="vt-saved-group-title">
 						{title}
-						<Icon
-							className="vt-saved-group-badge"
-							icon="bookmark"
-							tooltip="Saved group"
-						/>
+						{savedGroup ? (
+							<Icon
+								className="vt-group-bookmark is-saved"
+								icon="bookmark"
+								tooltip="Saved group"
+							/>
+						) : (
+							<Icon
+								className="vt-group-bookmark is-unsaved clickable-icon"
+								icon="bookmark"
+								tooltip="Save group"
+								onClick={(e) => {
+									e.stopPropagation();
+									savedGroupManager.promptToSaveGroup(group);
+								}}
+							/>
+						)}
 					</span>
 				) : (
 					title

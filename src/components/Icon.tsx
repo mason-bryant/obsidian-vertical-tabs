@@ -1,10 +1,11 @@
 import { setIcon } from "obsidian";
-import { useEffect, useRef } from "react";
+import { MouseEvent, useEffect, useRef } from "react";
 
 interface IconProps {
 	icon: string;
 	className: string;
 	tooltip?: string;
+	onClick?: (event: MouseEvent<HTMLDivElement>) => void;
 }
 
 export const Icon = (props: IconProps) => {
@@ -13,6 +14,11 @@ export const Icon = (props: IconProps) => {
 		if (ref.current) setIcon(ref.current, props.icon);
 	}, [props.icon]);
 	return (
-		<div className={props.className} aria-label={props.tooltip} ref={ref} />
+		<div
+			className={props.className}
+			aria-label={props.tooltip}
+			onClick={props.onClick}
+			ref={ref}
+		/>
 	);
 };
