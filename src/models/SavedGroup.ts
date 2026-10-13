@@ -19,8 +19,25 @@ export interface SavedTab {
 	// File path, URL, or the link path of a link that does not resolve (yet).
 	target: string;
 	title?: string;
+	pinned?: boolean;
 	// The original markdown line, so entries we did not touch are written back verbatim.
 	line?: string;
+}
+
+// What this device last synced for a tab: which tab, its position, and whether it was pinned.
+export interface TabState {
+	key: string;
+	pinned: boolean;
+}
+
+export const toTabStates = (tabs: SavedTab[]): TabState[] =>
+	tabs.map((tab) => ({ key: tab.key, pinned: !!tab.pinned }));
+
+export function haveSameTabs(a: TabState[], b: TabState[]): boolean {
+	return (
+		a.length === b.length &&
+		a.every((tab, index) => tab.key === b[index]?.key && tab.pinned === b[index]?.pinned)
+	);
 }
 
 // Whether a saved group opens in the main window or in its own window.
@@ -129,6 +146,24 @@ export function parseListItemLink(line: string): ParsedLink | null {
 	return url ? { type: "url", url } : null;
 }
 
+// Pinned tabs are marked with a pin right after the list marker: "- 📌 [[Note]]".
+export const PIN_MARKER = "📌";
+const LIST_PREFIX = /^(\s*(?:[-*+]|\d+[.)])\s+(?:\[.\]\s+)?)/;
+const PINNED_PREFIX = /^(\s*(?:[-*+]|\d+[.)])\s+(?:\[.\]\s+)?)📌\uFE0F?\s*/;
+
+export function isPinnedLine(line: string): boolean {
+	return PINNED_PREFIX.test(line);
+}
+
+export function setPinnedInLine(line: string, pinned: boolean): string {
+	const unpinned = line.replace(PINNED_PREFIX, "$1");
+	if (!pinned) return unpinned;
+	const prefix = LIST_PREFIX.exec(unpinned)?.[1];
+	return prefix === undefined
+		? unpinned
+		: `${prefix}${PIN_MARKER} ${unpinned.slice(prefix.length)}`;
+}
+
 export function dedupeTabs(tabs: SavedTab[]): SavedTab[] {
 	const seen = new Set<string>();
 	return tabs.filter((tab) => {
@@ -138,34 +173,38 @@ export function dedupeTabs(tabs: SavedTab[]): SavedTab[] {
 	});
 }
 
-export function haveSameKeys(a: string[], b: string[]): boolean {
-	return a.length === b.length && a.every((key, index) => key === b[index]);
-}
-
 // Three-way merge of a tab list.
-// `base` is the list of keys this device last synced, `local` is what the group
-// has now, and `remote` is what the note currently contains (possibly edited
-// by someone else in the meantime). Local additions and removals are applied
-// on top of the remote list, so remote edits are not lost.
+// `base` is what this device last synced, `local` is what the group has now, and
+// `remote` is what the note currently contains (possibly edited elsewhere since).
+// - Tabs open here keep this device's order, minus tabs removed in the note since.
+// - Entries only in the note (added elsewhere, or that cannot open here, like a
+//   missing note) keep their place after the entry that precedes them in the note.
+// - Entries closed here are removed.
+// - A pin or unpin made here wins; otherwise the note's pinned state is kept.
 export function mergeTabs(
-	base: string[],
+	base: TabState[],
 	local: SavedTab[],
 	remote: SavedTab[]
 ): SavedTab[] {
-	const remoteKeys = remote.map((tab) => tab.key);
-	if (haveSameKeys(remoteKeys, base)) return dedupeTabs(local);
-
-	const baseKeys = new Set(base);
+	const basePinned = new Map(base.map((tab) => [tab.key, tab.pinned]));
 	const localKeys = new Set(local.map((tab) => tab.key));
-	const removedLocally = new Set(base.filter((key) => !localKeys.has(key)));
-	const result = remote.filter((tab) => !removedLocally.has(tab.key));
+	const remoteByKey = new Map(remote.map((tab) => [tab.key, tab]));
 
-	local.forEach((tab, index) => {
-		if (baseKeys.has(tab.key)) return;
-		if (result.some((existing) => existing.key === tab.key)) return;
+	const result: SavedTab[] = local
+		.filter((tab) => !basePinned.has(tab.key) || remoteByKey.has(tab.key))
+		.map((tab) => {
+			const remoteTab = remoteByKey.get(tab.key);
+			const pinnedAtBase = basePinned.get(tab.key);
+			if (!remoteTab || pinnedAtBase === undefined) return tab;
+			const pinnedHere = !!tab.pinned !== pinnedAtBase;
+			return pinnedHere ? tab : { ...tab, pinned: !!remoteTab.pinned };
+		});
+
+	remote.forEach((tab, index) => {
+		if (localKeys.has(tab.key) || basePinned.has(tab.key)) return;
 		let insertAt = 0;
 		for (let i = index - 1; i >= 0; i--) {
-			const previousKey = local[i]?.key;
+			const previousKey = remote[i]?.key;
 			const position = result.findIndex((t) => t.key === previousKey);
 			if (position !== -1) {
 				insertAt = position + 1;

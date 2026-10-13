@@ -1,6 +1,5 @@
 import {
 	App,
-	debounce,
 	getFrontMatterInfo,
 	ItemView,
 	normalizePath,
@@ -17,6 +16,7 @@ import {
 	WorkspaceWindowInitData,
 } from "obsidian";
 import { nanoid } from "nanoid";
+import { around } from "monkey-around";
 import ObsidianVerticalTabs from "src/main";
 import {
 	DEFAULT_SAVED_GROUPS_FOLDER,
@@ -30,9 +30,13 @@ import {
 	SavedGroupPlacement,
 	SavedGroupWindow,
 	SavedTab,
+	setPinnedInLine,
+	TabState,
+	toTabStates,
 	dedupeTabs,
 	fileTabKey,
-	haveSameKeys,
+	haveSameTabs,
+	isPinnedLine,
 	mergeTabs,
 	parseListItemLink,
 	parseSavedGroupWindow,
@@ -67,10 +71,25 @@ type FrontMatter = Record<string, unknown>;
 // A real ID is written to the note the first time it is opened.
 const pathID = (path: string): SavedGroupID => `path:${path}`;
 const isPathID = (id: SavedGroupID) => id.startsWith("path:");
-const keysOf = (tabs: SavedTab[]) => tabs.map((tab) => tab.key);
 
 const basenameOf = (path: string) =>
 	(path.split("/").pop() ?? path).replace(/\.md$/, "");
+
+function mainWindowDebounce(callback: () => void, delay: number) {
+	let timer: number | null = null;
+	const run = () => {
+		if (timer !== null) window.clearTimeout(timer);
+		timer = window.setTimeout(() => {
+			timer = null;
+			callback();
+		}, delay);
+	};
+	run.cancel = () => {
+		if (timer !== null) window.clearTimeout(timer);
+		timer = null;
+	};
+	return run;
+}
 
 const isEmptyFolder = (folder: TFolder): boolean =>
 	folder.children.every((child) => child instanceof TFolder && isEmptyFolder(child));
@@ -109,7 +128,7 @@ class SavedGroupManager {
 	private isReady = false;
 	// Tab group ID -> tab keys this device last synced. Used to tell local edits
 	// apart from edits made to the note elsewhere.
-	private snapshots = new Map<Identifier, string[]>();
+	private snapshots = new Map<Identifier, TabState[]>();
 	// Tab group ID -> whether it was in its own window when last checked. Used
 	// to tell when the group was moved on this device.
 	private windowModes = new Map<Identifier, boolean>();
@@ -117,17 +136,21 @@ class SavedGroupManager {
 	private restoring = new Set<Identifier>();
 	private queue: Promise<void> = Promise.resolve();
 
-	private requestSync = debounce(
+	// Obsidian's debounce schedules its timer on the active window. If that is a
+	// popout or the settings window and it closes first, the timer never fires and
+	// the debouncer stays pending for good. These timers live on the main window.
+	private requestSync = mainWindowDebounce(
 		() => void this.enqueue(() => this.syncAll()),
-		SYNC_DELAY,
-		true
+		SYNC_DELAY
 	);
 
-	private requestReindex = debounce(
+	private requestReindex = mainWindowDebounce(
 		() => void this.enqueue(() => this.indexAll()),
-		REINDEX_DELAY,
-		true
+		REINDEX_DELAY
 	);
+
+	// The last tab each leaf was serialized as, for while its view is loading.
+	private lastKnownTabs = new WeakMap<WorkspaceLeaf, SavedTab>();
 
 	private get app(): App {
 		if (!this.plugin) throw new Error("[VerticalTabs] Saved groups not initialized.");
@@ -260,18 +283,21 @@ class SavedGroupManager {
 			if (!link) continue;
 			if (link.type === "url") {
 				const { url, title } = link;
-				tabs.push({ key: urlTabKey(url), kind: "url", target: url, title, line });
+				const pinned = isPinnedLine(line);
+				tabs.push({ key: urlTabKey(url), kind: "url", target: url, title, pinned, line });
 				continue;
 			}
 			const file = this.app.metadataCache.getFirstLinkpathDest(
 				link.linkpath,
 				sourcePath
 			);
+			const pinned = isPinnedLine(line);
 			if (file) {
-				tabs.push({ key: fileTabKey(file.path), kind: "file", target: file.path, line });
+				const target = file.path;
+				tabs.push({ key: fileTabKey(target), kind: "file", target, pinned, line });
 			} else {
 				const target = link.linkpath;
-				tabs.push({ key: unresolvedTabKey(target), kind: "unresolved", target, line });
+				tabs.push({ key: unresolvedTabKey(target), kind: "unresolved", target, pinned, line });
 			}
 		}
 		return dedupeTabs(tabs);
@@ -337,6 +363,19 @@ class SavedGroupManager {
 		plugin.registerEvent(
 			workspace.on("file-open", () => this.onLayoutChange())
 		);
+		// Pinning a tab does not change the layout, so watch it directly.
+		const onPinnedChange = (leaf: WorkspaceLeaf) => this.onPinnedChange(leaf);
+		plugin.register(
+			around(WorkspaceLeaf.prototype, {
+				setPinned(old) {
+					return function (this: WorkspaceLeaf, pinned: boolean) {
+						const result = old.call(this, pinned);
+						onPinnedChange(this);
+						return result;
+					};
+				},
+			})
+		);
 		plugin.registerInterval(
 			window.setInterval(() => this.recordPopoutPlacements(), PLACEMENT_INTERVAL)
 		);
@@ -346,6 +385,11 @@ class SavedGroupManager {
 		plugin.registerEvent(
 			vault.on("rename", (file, oldPath) => this.onFileRename(file, oldPath))
 		);
+	}
+
+	private onPinnedChange(leaf: WorkspaceLeaf) {
+		if (!this.isReady || !leaf.parent) return;
+		if (savedGroupStore.getActions().isGroupSaved(leaf.parent.id)) this.requestSync();
 	}
 
 	private onLayoutChange() {
@@ -423,17 +467,32 @@ class SavedGroupManager {
 		// getViewState also works for deferred (not yet loaded) tabs.
 		const viewState = leaf.getViewState();
 		const state = viewState.state ?? {};
+		const pinned = !!viewState.pinned;
+		const remember = (tab: SavedTab) => {
+			this.lastKnownTabs.set(leaf, tab);
+			return tab;
+		};
+		// While a tab is loading (e.g. right after a deferred tab is activated),
+		// its state briefly has no file or URL. Keep its last known entry, or a
+		// sync at that moment would treat the tab as closed.
+		const whileLoading = () => {
+			const lastKnown = this.lastKnownTabs.get(leaf);
+			return lastKnown ? { ...lastKnown, pinned } : null;
+		};
 		if (viewState.type === "webviewer") {
 			const url = state.url;
-			if (typeof url !== "string" || !/^https?:\/\//i.test(url)) return null;
-			const title = leaf.getDisplayText();
-			return { key: urlTabKey(url), kind: "url", target: url, title: title || undefined };
+			if (typeof url !== "string" || !url) return whileLoading();
+			if (!/^https?:\/\//i.test(url)) return null;
+			const title = leaf.getDisplayText() || undefined;
+			return remember({ key: urlTabKey(url), kind: "url", target: url, title, pinned });
 		}
 		const path = state.file;
-		if (typeof path !== "string") return null;
+		if (typeof path !== "string" || !path) {
+			return viewState.type === "empty" ? null : whileLoading();
+		}
 		const file = this.app.vault.getFileByPath(path);
 		if (!file) return null;
-		return { key: fileTabKey(file.path), kind: "file", target: file.path };
+		return remember({ key: fileTabKey(file.path), kind: "file", target: file.path, pinned });
 	}
 
 	private serializeGroup(group: WorkspaceParent): SavedTab[] {
@@ -444,6 +503,10 @@ class SavedGroupManager {
 	}
 
 	private formatTab(tab: SavedTab, sourcePath: string): string {
+		return setPinnedInLine(this.formatTabLink(tab, sourcePath), !!tab.pinned);
+	}
+
+	private formatTabLink(tab: SavedTab, sourcePath: string): string {
 		if (tab.kind === "url") {
 			const url = formatURL(tab.target);
 			return tab.title
@@ -460,7 +523,11 @@ class SavedGroupManager {
 	private formatTabs(tabs: SavedTab[], existing: SavedTab[], sourcePath: string) {
 		const lines = new Map(existing.map((tab) => [tab.key, tab.line]));
 		return tabs.map((tab) => {
-			const line = lines.get(tab.key) ?? tab.line ?? this.formatTab(tab, sourcePath);
+			const existingLine = lines.get(tab.key) ?? tab.line;
+			const line =
+				existingLine !== undefined
+					? setPinnedInLine(existingLine, !!tab.pinned)
+					: this.formatTab(tab, sourcePath);
 			return { ...tab, line };
 		});
 	}
@@ -488,7 +555,7 @@ class SavedGroupManager {
 			if (!group || this.snapshots.has(groupID) || this.restoring.has(groupID)) {
 				continue;
 			}
-			this.snapshots.set(groupID, keysOf(this.serializeGroup(group)));
+			this.snapshots.set(groupID, toTabStates(this.serializeGroup(group)));
 		}
 		savedGroupStore.getActions().setOpenGroups(openGroups);
 		this.recordPlacements(live, openGroups);
@@ -563,22 +630,22 @@ class SavedGroupManager {
 		const savedGroup = savedGroupStore.getState().savedGroups[savedGroupID];
 		if (!savedGroup) return;
 		const local = this.serializeGroup(group);
-		const localKeys = keysOf(local);
+		const localStates = toTabStates(local);
 		const base = this.snapshots.get(group.id);
 		if (!base) {
-			this.snapshots.set(group.id, localKeys);
+			this.snapshots.set(group.id, localStates);
 			return;
 		}
-		if (haveSameKeys(base, localKeys)) return;
+		if (haveSameTabs(base, localStates)) return;
 		const file = this.app.vault.getFileByPath(savedGroup.path);
 		if (!file) return;
-		this.snapshots.set(group.id, localKeys);
+		this.snapshots.set(group.id, localStates);
 		let tabs = savedGroup.tabs;
 		await this.app.vault.process(file, (content) => {
 			const { offset, body } = splitFrontMatter(content);
 			const remote = this.resolveTabs(body, file.path);
 			tabs = this.formatTabs(mergeTabs(base, local, remote), remote, file.path);
-			if (haveSameKeys(keysOf(tabs), keysOf(remote))) return content;
+			if (haveSameTabs(toTabStates(tabs), toTabStates(remote))) return content;
 			const lines = tabs.map((tab) => tab.line ?? "");
 			return content.slice(0, offset) + replaceTabList(body, lines);
 		});
@@ -663,7 +730,7 @@ class SavedGroupManager {
 				tabs,
 			});
 			actions.link(group.id, id);
-			this.snapshots.set(group.id, keysOf(tabs));
+			this.snapshots.set(group.id, toTabStates(tabs));
 			this.windowModes.set(group.id, isPopout);
 			new Notice(`Saved tab group "${displayName}"`);
 		});
@@ -719,7 +786,7 @@ class SavedGroupManager {
 				this.keepTab(firstLeaf);
 			} finally {
 				this.restoring.delete(group.id);
-				this.snapshots.set(group.id, keysOf(this.serializeGroup(group)));
+				this.snapshots.set(group.id, toTabStates(this.serializeGroup(group)));
 				this.windowModes.set(group.id, this.isInOwnWindow(group));
 				this.refreshOpenGroups();
 			}
@@ -751,6 +818,11 @@ class SavedGroupManager {
 	}
 
 	private async openTab(leaf: WorkspaceLeaf, tab: SavedTab) {
+		await this.openTabContent(leaf, tab);
+		if (tab.pinned) leaf.setPinned(true);
+	}
+
+	private async openTabContent(leaf: WorkspaceLeaf, tab: SavedTab) {
 		if (tab.kind === "file") {
 			const file = this.app.vault.getFileByPath(tab.target);
 			// No open state, so that tab deduplication does not redirect the file.
