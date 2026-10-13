@@ -11,7 +11,8 @@
 		max-width: 100%;
 	}
 
-	.vt-saved-group-badge {
+	// Filled for saved groups; an outline that saves the group when clicked otherwise.
+	.vt-group-bookmark {
 		display: inline-flex;
 		flex-shrink: 0;
 		color: var(--text-faint);
@@ -19,6 +20,23 @@
 		svg {
 			width: var(--icon-xs);
 			height: var(--icon-xs);
+		}
+
+		&.is-saved {
+			color: var(--text-muted);
+
+			svg {
+				fill: currentColor;
+			}
+		}
+
+		&.is-unsaved {
+			padding: 0;
+			cursor: var(--cursor);
+
+			&:hover {
+				color: var(--text-normal);
+			}
 		}
 	}
 
