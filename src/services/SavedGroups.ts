@@ -70,7 +70,7 @@ type FrontMatter = Record<string, unknown>;
 // Notes in the folder without an ID get a temporary one derived from their path.
 // A real ID is written to the note the first time it is opened.
 const pathID = (path: string): SavedGroupID => `path:${path}`;
-const isPathID = (id: SavedGroupID) => id.startsWith("path:");
+export const isPathID = (id: SavedGroupID) => id.startsWith("path:");
 
 const basenameOf = (path: string) =>
 	(path.split("/").pop() ?? path).replace(/\.md$/, "");
