@@ -89,6 +89,21 @@
 	}
 }
 
+.obsidian-vertical-tabs-container .vt-saved-group-hotkey {
+	flex-shrink: 0;
+	padding: 0 var(--size-2-2);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	color: var(--text-faint);
+	font-size: var(--font-ui-smaller);
+	line-height: 1.5;
+	white-space: nowrap;
+}
+
+.obsidian-vertical-tabs-container .vt-saved-group .tree-item-flair-outer {
+	gap: var(--size-4-1);
+}
+
 .vt-saved-group-suggestion-note {
 	color: var(--text-faint);
 	font-size: var(--font-ui-smaller);

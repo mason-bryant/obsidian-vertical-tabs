@@ -55,6 +55,7 @@ import {
 	openSavedGroupHotkeySettings,
 } from "src/services/SavedGroupCommands";
 import { Icon } from "./Icon";
+import { SavedGroupHotkey } from "./SavedGroupHotkey";
 
 interface GroupProps {
 	type: GroupType;
@@ -618,11 +619,14 @@ export const Group = (props: GroupProps) => {
 					<span className="vt-saved-group-title">
 						{title}
 						{savedGroup ? (
-							<Icon
-								className="vt-group-bookmark is-saved"
-								icon="bookmark"
-								tooltip="Saved group"
-							/>
+							<>
+								<Icon
+									className="vt-group-bookmark is-saved"
+									icon="bookmark"
+									tooltip="Saved group"
+								/>
+								<SavedGroupHotkey savedGroupID={savedGroup.id} />
+							</>
 						) : (
 							<Icon
 								className="vt-group-bookmark is-unsaved clickable-icon"
