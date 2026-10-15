@@ -50,6 +50,10 @@ import { IconSelectionModal } from "src/views/IconSelectionModal";
 import { createVTMenu } from "src/services/Menu";
 import { savedGroupStore } from "src/stores/SavedGroupStore";
 import { savedGroupManager } from "src/services/SavedGroups";
+import {
+	getSetHotkeyTitle,
+	openSavedGroupHotkeySettings,
+} from "src/services/SavedGroupCommands";
 import { Icon } from "./Icon";
 
 interface GroupProps {
@@ -376,6 +380,12 @@ export const Group = (props: GroupProps) => {
 						item.VTMenuAction = "move-saved-group";
 					});
 				}
+				menu.addItem((item) => {
+					item.setSection("saved-group")
+						.setTitle(getSetHotkeyTitle(app, savedGroup.id))
+						.onClick(() => openSavedGroupHotkeySettings(app, savedGroup));
+					item.VTMenuAction = "set-saved-group-hotkey";
+				});
 				menu.addItem((item) => {
 					item.setSection("saved-group")
 						.setTitle("Delete saved group")
