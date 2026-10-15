@@ -12,6 +12,7 @@ import { createVTMenu } from "src/services/Menu";
 import { IconSelectionModal } from "src/views/IconSelectionModal";
 import { CssClasses, toClassName } from "src/utils/CssClasses";
 import { IconButton } from "./IconButton";
+import { SavedGroupHotkey } from "./SavedGroupHotkey";
 import { Icon } from "./Icon";
 
 const SavedGroupItem = (props: { savedGroup: SavedGroup }) => {
@@ -108,6 +109,7 @@ const SavedGroupItem = (props: { savedGroup: SavedGroup }) => {
 						tooltip="Delete saved group"
 						onClick={remove}
 					/>
+					<SavedGroupHotkey savedGroupID={id} />
 					<span className="tree-item-flair">{count}</span>
 				</div>
 			</div>

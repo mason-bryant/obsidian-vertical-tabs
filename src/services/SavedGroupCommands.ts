@@ -1,4 +1,5 @@
 import { App } from "obsidian";
+import { around } from "monkey-around";
 import ObsidianVerticalTabs from "src/main";
 import { SavedGroup, SavedGroupID } from "src/models/SavedGroup";
 import { savedGroupStore } from "src/stores/SavedGroupStore";
@@ -41,6 +42,32 @@ export function registerSavedGroupCommands(plugin: ObsidianVerticalTabs) {
 			if (state.savedGroups !== previous.savedGroups) update(state.savedGroups);
 		})
 	);
+	watchHotkeyChanges(plugin);
+}
+
+// Obsidian has no event for hotkey changes, so watch the methods that change
+// them: setting or removing a hotkey, and reloading hotkeys.json (e.g. after sync).
+type HotkeyMethod = (...args: unknown[]) => unknown;
+const WATCHED_HOTKEY_METHODS = ["setHotkeys", "removeHotkeys", "load"] as const;
+
+function watchHotkeyChanges(plugin: ObsidianVerticalTabs) {
+	const hotkeyManager = plugin.app.hotkeyManager as unknown as
+		| Record<string, HotkeyMethod>
+		| undefined;
+	if (!hotkeyManager) return;
+	const notify = () => savedGroupStore.getActions().bumpHotkeyRevision();
+	const patches: Record<string, (old: HotkeyMethod) => HotkeyMethod> = {};
+	for (const name of WATCHED_HOTKEY_METHODS) {
+		if (typeof hotkeyManager[name] !== "function") continue;
+		patches[name] = (old) =>
+			function (this: unknown, ...args: unknown[]) {
+				const result = old.apply(this, args);
+				if (result instanceof Promise) void result.then(notify, notify);
+				else notify();
+				return result;
+			};
+	}
+	plugin.register(around(hotkeyManager, patches));
 }
 
 // Obsidian prefixes command IDs with the plugin ID.
