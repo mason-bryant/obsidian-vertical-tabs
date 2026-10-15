@@ -38,8 +38,14 @@ import {
 import { runIndexedDBDiagnostic } from "src/services/IndexedDBDiagnostic";
 import { savedGroupManager } from "src/services/SavedGroups";
 import { FolderSuggest } from "./FolderSuggest";
-import { DEFAULT_SAVED_GROUPS_FOLDER } from "src/models/SavedGroup";
+import {
+	DEFAULT_RECENTLY_CLOSED_LIMIT,
+	DEFAULT_SAVED_GROUPS_FOLDER,
+} from "src/models/SavedGroup";
 
+const MAX_RECENTLY_CLOSED = 200;
+const RECENTLY_CLOSED_DESC =
+	"How many closed tabs each tab group remembers. When there are more, the oldest is forgotten. Saved groups keep them in their note; other groups until Obsidian closes. Set to 0 to turn this off.";
 const SAVED_GROUPS_FOLDER_DESC =
 	"Saved tab groups are stored as notes in this folder, so they sync and can be shared with everyone who uses this vault. Which groups are open is remembered separately on each device. When you change the folder, you can move existing saved groups to it.";
 
@@ -959,6 +965,30 @@ export class ObsidianVerticalTabsSettingTab extends PluginSettingTab {
 			setting.setName("Folder").setDesc(SAVED_GROUPS_FOLDER_DESC);
 			this.addSavedGroupsFolderInput(setting);
 		});
+		this.createSetting(group, (setting) => {
+			setting
+				.setName("Recently closed tabs to keep")
+				.setDesc(RECENTLY_CLOSED_DESC)
+				.addText((text) => {
+					text.inputEl.type = "number";
+					text.inputEl.min = "0";
+					text.inputEl.max = String(MAX_RECENTLY_CLOSED);
+					text.setPlaceholder(String(DEFAULT_RECENTLY_CLOSED_LIMIT)).setValue(
+						String(this.plugin.settings.recentlyClosedLimit)
+					);
+					text.inputEl.addEventListener("change", () =>
+						this.setRecentlyClosedLimit(text.getValue())
+					);
+				});
+		});
+	}
+
+	private setRecentlyClosedLimit(value: unknown) {
+		const parsed = Math.floor(Number(value));
+		const limit = Number.isFinite(parsed)
+			? Math.min(MAX_RECENTLY_CLOSED, Math.max(0, parsed))
+			: DEFAULT_RECENTLY_CLOSED_LIMIT;
+		useSettings.getState().setSettings({ recentlyClosedLimit: limit });
 	}
 
 	// The folder is applied when the input is committed (Enter, leaving the
@@ -1493,6 +1523,9 @@ export class ObsidianVerticalTabsSettingTab extends PluginSettingTab {
 					deduplicatePopupTabs: value as boolean,
 				});
 				break;
+			case "recentlyClosedLimit":
+				this.setRecentlyClosedLimit(value);
+				break;
 			case "continuousViewShowMetadata":
 			case "continuousViewShowBacklinks":
 				useSettings
@@ -1884,6 +1917,17 @@ export class ObsidianVerticalTabsSettingTab extends PluginSettingTab {
 						name: "Folder",
 						desc: SAVED_GROUPS_FOLDER_DESC,
 						render: (setting) => this.addSavedGroupsFolderInput(setting),
+					},
+					{
+						name: "Recently closed tabs to keep",
+						desc: RECENTLY_CLOSED_DESC,
+						control: {
+							type: "number",
+							key: "recentlyClosedLimit",
+							min: 0,
+							max: MAX_RECENTLY_CLOSED,
+							placeholder: String(DEFAULT_RECENTLY_CLOSED_LIMIT),
+						},
 					},
 				],
 			},

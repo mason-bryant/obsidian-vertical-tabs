@@ -104,6 +104,43 @@
 	gap: var(--size-4-1);
 }
 
+.obsidian-vertical-tabs-container .vt-recently-closed {
+	.vt-recently-closed-header {
+		color: var(--text-faint);
+		font-size: var(--font-ui-smaller);
+
+		.collapse-icon svg {
+			width: 10px;
+			height: 10px;
+			stroke-width: 2px;
+			transition: transform 100ms ease-in-out;
+		}
+	}
+
+	&.is-collapsed .vt-recently-closed-header .collapse-icon svg {
+		transform: rotate(calc(var(--direction) * -1 * 90deg));
+	}
+
+	.vt-recently-closed-tab {
+		.tree-item-self {
+			color: var(--text-muted);
+		}
+
+		.tree-item-icon svg {
+			width: var(--icon-xs);
+			height: var(--icon-xs);
+		}
+
+		.clickable-icon[data-action="forget-closed-tab"] {
+			visibility: hidden;
+		}
+
+		.tree-item-self:hover .clickable-icon[data-action="forget-closed-tab"] {
+			visibility: visible;
+		}
+	}
+}
+
 .vt-saved-group-suggestion-note {
 	color: var(--text-faint);
 	font-size: var(--font-ui-smaller);

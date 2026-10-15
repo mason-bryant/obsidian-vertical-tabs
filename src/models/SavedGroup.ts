@@ -10,6 +10,7 @@ export const SAVED_GROUP_ICON_KEY = "vertical-tabs-icon";
 export const SAVED_GROUP_WINDOW_KEY = "vertical-tabs-window";
 export const SAVED_GROUP_NAME_KEY = "vertical-tabs-name";
 export const DEFAULT_SAVED_GROUPS_FOLDER = "Vertical Tab Groups";
+export const DEFAULT_RECENTLY_CLOSED_LIMIT = 20;
 
 export type SavedTabKind = "file" | "url" | "unresolved";
 
@@ -59,6 +60,8 @@ export interface SavedGroup {
 	icon?: string;
 	window?: SavedGroupWindow;
 	tabs: SavedTab[];
+	// Most recent first.
+	recentlyClosed: SavedTab[];
 }
 
 // Size and position of the window a saved group was last in on this device.
@@ -217,9 +220,69 @@ export function mergeTabs(
 	return dedupeTabs(result);
 }
 
+// Recently closed tabs live in their own section after the tab list.
+export const RECENTLY_CLOSED_HEADING = "## Recently closed";
+const RECENTLY_CLOSED_HEADING_LINE = /^#{1,6}\s+recently closed\s*$/i;
+const HEADING_LINE = /^#{1,6}\s/;
+
+// Splits a note body into the tab list part, the "Recently closed" section
+// (its lines up to the next heading), and whatever follows that section.
+export function splitRecentlyClosed(body: string) {
+	const lines = body.split("\n");
+	const start = lines.findIndex((line) => RECENTLY_CLOSED_HEADING_LINE.test(line.trim()));
+	if (start === -1) return { tabs: body, recent: [] as string[], rest: null };
+	let end = lines.length;
+	for (let i = start + 1; i < lines.length; i++) {
+		if (HEADING_LINE.test(lines[i] ?? "")) {
+			end = i;
+			break;
+		}
+	}
+	return {
+		tabs: lines.slice(0, start).join("\n"),
+		recent: lines.slice(start + 1, end),
+		rest: lines.slice(end).join("\n"),
+	};
+}
+
+// Adds newly closed tabs (most recent first) to the list, drops entries that
+// are open again or forgotten, removes duplicates, and keeps at most `limit`.
+export function updateRecentlyClosed(
+	current: SavedTab[],
+	closed: SavedTab[],
+	removeKeys: Set<string>,
+	limit: number
+): SavedTab[] {
+	return dedupeTabs([...closed, ...current])
+		.filter((tab) => !removeKeys.has(tab.key))
+		.slice(0, Math.max(0, limit));
+}
+
+// Replaces the "Recently closed" section with new lines, adding it after the
+// tab list if needed, or removing it when there is nothing to list.
+export function replaceRecentlyClosedList(body: string, lines: string[]): string {
+	const { tabs, rest } = splitRecentlyClosed(body);
+	const parts = [tabs.replace(/\s+$/, "")];
+	if (lines.length > 0) parts.push(`${RECENTLY_CLOSED_HEADING}\n${lines.join("\n")}`);
+	if (rest) parts.push(rest.trim());
+	const joined = parts.filter(Boolean).join("\n\n");
+	return joined ? `${joined}\n` : "";
+}
+
 // Replaces the block of tab list items in a note body with new lines,
 // keeping any text before and after the list.
 export function replaceTabList(body: string, lines: string[]): string {
+	const bodyLines = body.split("\n");
+	const start = bodyLines.findIndex((line) =>
+		RECENTLY_CLOSED_HEADING_LINE.test(line.trim())
+	);
+	if (start === -1) return replaceTabListIn(body, lines);
+	const head = replaceTabListIn(bodyLines.slice(0, start).join("\n"), lines).replace(/\s+$/, "");
+	const section = bodyLines.slice(start).join("\n");
+	return head ? `${head}\n\n${section}` : section;
+}
+
+function replaceTabListIn(body: string, lines: string[]): string {
 	const bodyLines = body.split("\n");
 	const isTabLine = (line: string) => parseListItemLink(line) !== null;
 	const first = bodyLines.findIndex(isTabLine);
