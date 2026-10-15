@@ -25,12 +25,13 @@ import {
 	moveMultipleTabsToNewGroup,
 } from "src/services/MoveTab";
 import { GroupSlot } from "./GroupSlot";
-import { Identifier } from "src/models/VTWorkspace";
+import { GroupType, Identifier } from "src/models/VTWorkspace";
 import { WorkspaceLeaf } from "obsidian";
 import { makeLeafNonEphemeral } from "src/services/EphemeralTabs";
 import { TabSlot } from "./TabSlot";
 import { useTabSelection } from "src/stores/TabSelectionStore";
 import { SavedGroupList } from "./SavedGroupList";
+import { RecentlyClosedTabs } from "./RecentlyClosedTabs";
 
 export const NavigationContent = () => {
 	const groupIDs = tabCacheStore((state) => state.groupIDs);
@@ -198,6 +199,9 @@ export const NavigationContent = () => {
 											group={entryOf(groupID).group}
 											groupID={groupID}
 										/>
+										{entryOf(groupID).groupType === GroupType.RootSplit && (
+											<RecentlyClosedTabs group={entryOf(groupID).group} />
+										)}
 									</SortableContext>
 								)}
 							</Group>

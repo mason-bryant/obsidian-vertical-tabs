@@ -12,6 +12,7 @@ import {
 	TFolder,
 	WorkspaceLeaf,
 	WorkspaceParent,
+	WorkspaceSplit,
 	WorkspaceWindow,
 	WorkspaceWindowInitData,
 } from "obsidian";
@@ -41,7 +42,11 @@ import {
 	parseListItemLink,
 	parseSavedGroupWindow,
 	resolveGroupName,
+	replaceRecentlyClosedList,
 	replaceTabList,
+	splitRecentlyClosed,
+	updateRecentlyClosed,
+	DEFAULT_RECENTLY_CLOSED_LIMIT,
 	sanitizeGroupName,
 	unresolvedTabKey,
 	urlTabKey,
@@ -149,6 +154,14 @@ class SavedGroupManager {
 		REINDEX_DELAY
 	);
 
+	// Tab group ID -> leaf ID -> tab, as of the last layout change; used to
+	// notice closed tabs.
+	private previousTabs = new Map<Identifier, Map<string, SavedTab>>();
+	// Recently closed tabs and forgotten entries of saved groups not yet
+	// written to their notes.
+	private pendingClosed = new Map<SavedGroupID, SavedTab[]>();
+	private pendingForget = new Map<SavedGroupID, Set<string>>();
+
 	// The last tab each leaf was serialized as, for while its view is loading.
 	private lastKnownTabs = new WeakMap<WorkspaceLeaf, SavedTab>();
 
@@ -171,6 +184,7 @@ class SavedGroupManager {
 			void this.enqueue(async () => {
 				await this.indexAll();
 				this.isReady = true;
+				this.trackClosedTabs();
 				this.refreshOpenGroups();
 			});
 		});
@@ -277,8 +291,18 @@ class SavedGroupManager {
 	/* Reading notes */
 
 	private resolveTabs(body: string, sourcePath: string): SavedTab[] {
+		return this.resolveTabLines(splitRecentlyClosed(body).tabs.split("\n"), sourcePath);
+	}
+
+	private resolveRecentlyClosed(body: string, sourcePath: string): SavedTab[] {
+		return this.resolveTabLines(splitRecentlyClosed(body).recent, sourcePath).map(
+			(tab) => ({ ...tab, pinned: false })
+		);
+	}
+
+	private resolveTabLines(lines: string[], sourcePath: string): SavedTab[] {
 		const tabs: SavedTab[] = [];
-		for (const line of body.split("\n")) {
+		for (const line of lines) {
 			const link = parseListItemLink(line);
 			if (!link) continue;
 			if (link.type === "url") {
@@ -315,6 +339,7 @@ class SavedGroupManager {
 			icon: asString(frontmatter[SAVED_GROUP_ICON_KEY]),
 			window: parseSavedGroupWindow(frontmatter[SAVED_GROUP_WINDOW_KEY]),
 			tabs: this.resolveTabs(body, file.path),
+			recentlyClosed: this.resolveRecentlyClosed(body, file.path),
 		};
 	}
 
@@ -394,6 +419,7 @@ class SavedGroupManager {
 
 	private onLayoutChange() {
 		if (!this.isReady) return;
+		this.trackClosedTabs();
 		this.refreshOpenGroups();
 		this.requestSync();
 	}
@@ -636,20 +662,38 @@ class SavedGroupManager {
 			this.snapshots.set(group.id, localStates);
 			return;
 		}
-		if (haveSameTabs(base, localStates)) return;
+		const closed = this.pendingClosed.get(savedGroupID) ?? [];
+		const forget = this.pendingForget.get(savedGroupID) ?? new Set<string>();
+		const hasRecentChanges = closed.length > 0 || forget.size > 0;
+		if (haveSameTabs(base, localStates) && !hasRecentChanges) return;
 		const file = this.app.vault.getFileByPath(savedGroup.path);
 		if (!file) return;
 		this.snapshots.set(group.id, localStates);
+		this.pendingClosed.delete(savedGroupID);
+		this.pendingForget.delete(savedGroupID);
 		let tabs = savedGroup.tabs;
+		let recentlyClosed = savedGroup.recentlyClosed;
 		await this.app.vault.process(file, (content) => {
 			const { offset, body } = splitFrontMatter(content);
 			const remote = this.resolveTabs(body, file.path);
 			tabs = this.formatTabs(mergeTabs(base, local, remote), remote, file.path);
-			if (haveSameTabs(toTabStates(tabs), toTabStates(remote))) return content;
-			const lines = tabs.map((tab) => tab.line ?? "");
-			return content.slice(0, offset) + replaceTabList(body, lines);
+			// Tabs that are open again leave the recently closed list.
+			const remoteRecent = this.resolveRecentlyClosed(body, file.path);
+			const removeKeys = new Set([...tabs.map((tab) => tab.key), ...forget]);
+			const updatedRecent = updateRecentlyClosed(remoteRecent, closed, removeKeys, this.recentlyClosedLimit);
+			recentlyClosed = this.formatTabs(updatedRecent, remoteRecent, file.path);
+			const tabsChanged = !haveSameTabs(toTabStates(tabs), toTabStates(remote));
+			const recentChanged = !haveSameTabs(toTabStates(recentlyClosed), toTabStates(remoteRecent));
+			if (!tabsChanged && !recentChanged) return content;
+			let newBody = body;
+			if (tabsChanged) newBody = replaceTabList(newBody, tabs.map((tab) => tab.line ?? ""));
+			if (recentChanged) {
+				const lines = recentlyClosed.map((tab) => tab.line ?? "");
+				newBody = replaceRecentlyClosedList(newBody, lines);
+			}
+			return content.slice(0, offset) + newBody;
 		});
-		savedGroupStore.getActions().setSavedGroup({ ...savedGroup, tabs });
+		savedGroupStore.getActions().setSavedGroup({ ...savedGroup, tabs, recentlyClosed });
 	}
 
 	private enqueue(task: () => Promise<void>): Promise<void> {
@@ -671,6 +715,106 @@ class SavedGroupManager {
 
 	// Tabs of a saved group must not be auto-closed as ephemeral tabs, including
 	// after a restart, so their non-ephemeral state is also remembered.
+	/* Recently closed tabs */
+
+	private get recentlyClosedLimit(): number {
+		const limit = this.plugin?.settings.recentlyClosedLimit;
+		return typeof limit === "number" && limit >= 0 ? Math.floor(limit) : DEFAULT_RECENTLY_CLOSED_LIMIT;
+	}
+
+	// Compares each group's tabs with the last layout change. A tab counts as
+	// closed if its tab is gone and it is not open anywhere else (so moving or
+	// deduplicating a tab does not count), and its group still exists (closing
+	// a whole group does not add its tabs).
+	private trackClosedTabs() {
+		const current = new Map<Identifier, Map<string, SavedTab>>();
+		const openKeys = new Set<string>();
+		for (const group of this.getLiveGroups().values()) {
+			const tabs = new Map<string, SavedTab>();
+			for (const leaf of group.children) {
+				const tab = this.serializeLeaf(leaf);
+				if (!tab) continue;
+				tabs.set(leaf.id, tab);
+				openKeys.add(tab.key);
+			}
+			current.set(group.id, tabs);
+		}
+		for (const [groupID, before] of this.previousTabs) {
+			const now = current.get(groupID);
+			if (!now || this.restoring.has(groupID)) continue;
+			const closed: SavedTab[] = [];
+			for (const [leafID, tab] of before) {
+				if (now.has(leafID) || openKeys.has(tab.key)) continue;
+				if (tab.kind === "file" && !this.app.vault.getFileByPath(tab.target)) continue;
+				closed.unshift({ ...tab, pinned: false, line: undefined });
+			}
+			if (closed.length > 0) this.recordClosedTabs(groupID, closed);
+		}
+		this.previousTabs = current;
+	}
+
+	private recordClosedTabs(groupID: Identifier, closed: SavedTab[]) {
+		const limit = this.recentlyClosedLimit;
+		if (limit === 0) return;
+		const actions = savedGroupStore.getActions();
+		const savedGroup = actions.getSavedGroupOf(groupID);
+		if (!savedGroup) {
+			const current = savedGroupStore.getState().recentlyClosed[groupID] ?? [];
+			actions.setRecentlyClosed(groupID, updateRecentlyClosed(current, closed, new Set(), limit));
+			return;
+		}
+		const pending = this.pendingClosed.get(savedGroup.id) ?? [];
+		this.pendingClosed.set(savedGroup.id, [...closed, ...pending]);
+		const recentlyClosed = updateRecentlyClosed(savedGroup.recentlyClosed, closed, new Set(), limit);
+		actions.setSavedGroup({ ...savedGroup, recentlyClosed });
+		this.requestSync();
+	}
+
+	getOpenTabKeys(group: WorkspaceParent): Set<string> {
+		return new Set(this.serializeGroup(group).map((tab) => tab.key));
+	}
+
+	getRecentlyClosedLimit(): number {
+		return this.recentlyClosedLimit;
+	}
+
+	async reopenClosedTab(group: WorkspaceParent, tab: SavedTab) {
+		if (tab.kind === "unresolved" || (tab.kind === "file" && !this.app.vault.getFileByPath(tab.target))) {
+			new Notice(`"${tab.target}" was not found.`);
+			return;
+		}
+		if (tab.kind === "url" && !this.app.internalPlugins.getEnabledPluginById("webviewer")) {
+			new Notice("Opening web pages needs the Web viewer core plugin.");
+			return;
+		}
+		const parent = group as unknown as WorkspaceSplit;
+		const leaf = this.app.workspace.createLeafInParent(parent, group.children.length);
+		this.keepTab(leaf);
+		await this.openTab(leaf, { ...tab, pinned: false });
+		this.app.workspace.setActiveLeaf(leaf, { focus: true });
+		// Saved groups drop it on the next sync, since it is open again.
+		this.forgetClosedTabs(group, [tab.key], false);
+	}
+
+	forgetClosedTabs(group: WorkspaceParent, keys: string[], writeNow = true) {
+		const actions = savedGroupStore.getActions();
+		const savedGroup = actions.getSavedGroupOf(group.id);
+		const remove = new Set(keys);
+		if (!savedGroup) {
+			const current = savedGroupStore.getState().recentlyClosed[group.id] ?? [];
+			actions.setRecentlyClosed(group.id, current.filter((tab) => !remove.has(tab.key)));
+			return;
+		}
+		const forget = this.pendingForget.get(savedGroup.id) ?? new Set<string>();
+		keys.forEach((key) => forget.add(key));
+		this.pendingForget.set(savedGroup.id, forget);
+		const pending = this.pendingClosed.get(savedGroup.id);
+		if (pending) this.pendingClosed.set(savedGroup.id, pending.filter((tab) => !remove.has(tab.key)));
+		const recentlyClosed = savedGroup.recentlyClosed.filter((tab) => !remove.has(tab.key));
+		actions.setSavedGroup({ ...savedGroup, recentlyClosed });
+		if (writeNow) this.requestSync();
+	}
+
 	private keepTab(leaf: WorkspaceLeaf) {
 		makeLeafNonEphemeral(leaf);
 		useViewState.getState().rememberNonephemeralTab(this.app, leaf.id);
@@ -716,8 +860,14 @@ class SavedGroupManager {
 			frontmatter[SAVED_GROUP_WINDOW_KEY] = window;
 			group.children.forEach((leaf) => this.keepTab(leaf));
 			const tabs = this.formatTabs(this.serializeGroup(group), [], path);
-			const body = tabs.map((tab) => tab.line).join("\n");
-			const content = `---\n${stringifyYaml(frontmatter)}---\n${body}\n`;
+			const unsavedRecent = savedGroupStore.getState().recentlyClosed[group.id] ?? [];
+			const recentlyClosed = this.formatTabs(unsavedRecent, [], path);
+			const tabLines = tabs.map((tab) => tab.line ?? "");
+			const body = replaceRecentlyClosedList(
+				tabLines.join("\n"),
+				recentlyClosed.map((tab) => tab.line ?? "")
+			);
+			const content = `---\n${stringifyYaml(frontmatter)}---\n${body}`;
 			const file = await this.app.vault.create(path, content);
 			actions.setSavedGroup({
 				id,
@@ -728,7 +878,9 @@ class SavedGroupManager {
 				icon: metadata?.icon,
 				window,
 				tabs,
+				recentlyClosed,
 			});
+			actions.setRecentlyClosed(group.id, []);
 			actions.link(group.id, id);
 			this.snapshots.set(group.id, toTabStates(tabs));
 			this.windowModes.set(group.id, isPopout);
@@ -925,6 +1077,7 @@ class SavedGroupManager {
 			if (groupID) {
 				this.copyAppearanceToGroup(groupID, savedGroup);
 				this.snapshots.delete(groupID);
+				savedGroupStore.getActions().setRecentlyClosed(groupID, savedGroup.recentlyClosed);
 			}
 			const actions = savedGroupStore.getActions();
 			actions.unlink(savedGroupID);

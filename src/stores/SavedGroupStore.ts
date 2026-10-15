@@ -5,6 +5,7 @@ import {
 	SavedGroup,
 	SavedGroupID,
 	SavedGroupPlacement,
+	SavedTab,
 } from "src/models/SavedGroup";
 import { STORAGE_KEYS } from "src/constants/StorageKeys";
 import { localStorageService } from "./LocalStorageService";
@@ -23,6 +24,9 @@ interface SavedGroupState {
 	isListCollapsed: boolean;
 	// Bumped when hotkeys change, so hotkey labels re-render.
 	hotkeyRevision: number;
+	// Tab group ID -> recently closed tabs (most recent first) of groups that
+	// are not saved. Saved groups keep theirs in their note.
+	recentlyClosed: Record<Identifier, SavedTab[]>;
 }
 
 interface SavedGroupActions {
@@ -37,6 +41,7 @@ interface SavedGroupActions {
 	removePlacement: (id: SavedGroupID) => void;
 	toggleListCollapsed: () => void;
 	bumpHotkeyRevision: () => void;
+	setRecentlyClosed: (groupID: Identifier, tabs: SavedTab[]) => void;
 	getSavedGroupOf: (groupID: Identifier) => SavedGroup | undefined;
 	isGroupSaved: (groupID: Identifier) => boolean;
 }
@@ -65,6 +70,7 @@ export const savedGroupStore = useStoreWithActions<SavedGroupStore>(
 		placements: {},
 		isListCollapsed: false,
 		hotkeyRevision: 0,
+		recentlyClosed: {},
 		actions: {
 			hydrate: () => {
 				const links =
@@ -149,6 +155,13 @@ export const savedGroupStore = useStoreWithActions<SavedGroupStore>(
 				savePlacements(placements);
 				set({ placements });
 			},
+			setRecentlyClosed: (groupID, tabs) =>
+				set((state) => {
+					const recentlyClosed = { ...state.recentlyClosed };
+					if (tabs.length > 0) recentlyClosed[groupID] = tabs;
+					else delete recentlyClosed[groupID];
+					return { recentlyClosed };
+				}),
 			bumpHotkeyRevision: () =>
 				set((state) => ({ hotkeyRevision: state.hotkeyRevision + 1 })),
 			toggleListCollapsed: () => {

@@ -1,7 +1,10 @@
 import { TabNavigationStrategy } from "./TabNavigation";
 import { NewTabButtonPlacement } from "./NewTab";
 import { TabClosingBehavior } from "src/services/CloseTabs";
-import { DEFAULT_SAVED_GROUPS_FOLDER } from "./SavedGroup";
+import {
+	DEFAULT_RECENTLY_CLOSED_LIMIT,
+	DEFAULT_SAVED_GROUPS_FOLDER,
+} from "./SavedGroup";
 
 interface ObsidianVerticalTabsSettings {
 	showActiveTabs: boolean;
@@ -42,6 +45,7 @@ interface ObsidianVerticalTabsSettings {
 	newTabButtonPlacement: NewTabButtonPlacement;
 	tabClosingBehavior: TabClosingBehavior;
 	savedGroupsFolder: string;
+	recentlyClosedLimit: number;
 }
 
 export const DEFAULT_SETTINGS: ObsidianVerticalTabsSettings = {
@@ -83,6 +87,7 @@ export const DEFAULT_SETTINGS: ObsidianVerticalTabsSettings = {
 	newTabButtonPlacement: NewTabButtonPlacement.GroupToolbar,
 	tabClosingBehavior: TabClosingBehavior.ActiveRight,
 	savedGroupsFolder: DEFAULT_SAVED_GROUPS_FOLDER,
+	recentlyClosedLimit: DEFAULT_RECENTLY_CLOSED_LIMIT,
 };
 
 export type Settings = ObsidianVerticalTabsSettings;
