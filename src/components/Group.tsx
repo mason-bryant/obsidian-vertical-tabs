@@ -50,7 +50,12 @@ import { IconSelectionModal } from "src/views/IconSelectionModal";
 import { createVTMenu } from "src/services/Menu";
 import { savedGroupStore } from "src/stores/SavedGroupStore";
 import { savedGroupManager } from "src/services/SavedGroups";
+import {
+	getSetHotkeyTitle,
+	openSavedGroupHotkeySettings,
+} from "src/services/SavedGroupCommands";
 import { Icon } from "./Icon";
+import { SavedGroupHotkey } from "./SavedGroupHotkey";
 
 interface GroupProps {
 	type: GroupType;
@@ -378,6 +383,12 @@ export const Group = (props: GroupProps) => {
 				}
 				menu.addItem((item) => {
 					item.setSection("saved-group")
+						.setTitle(getSetHotkeyTitle(app, savedGroup.id))
+						.onClick(() => openSavedGroupHotkeySettings(app, savedGroup));
+					item.VTMenuAction = "set-saved-group-hotkey";
+				});
+				menu.addItem((item) => {
+					item.setSection("saved-group")
 						.setTitle("Delete saved group")
 						.setWarning(true)
 						.onClick(() =>
@@ -608,11 +619,14 @@ export const Group = (props: GroupProps) => {
 					<span className="vt-saved-group-title">
 						{title}
 						{savedGroup ? (
-							<Icon
-								className="vt-group-bookmark is-saved"
-								icon="bookmark"
-								tooltip="Saved group"
-							/>
+							<>
+								<Icon
+									className="vt-group-bookmark is-saved"
+									icon="bookmark"
+									tooltip="Saved group"
+								/>
+								<SavedGroupHotkey savedGroupID={savedGroup.id} />
+							</>
 						) : (
 							<Icon
 								className="vt-group-bookmark is-unsaved clickable-icon"

@@ -21,6 +21,8 @@ interface SavedGroupState {
 	// Saved group ID -> where it was last open on this device, so it reopens there.
 	placements: Record<SavedGroupID, SavedGroupPlacement>;
 	isListCollapsed: boolean;
+	// Bumped when hotkeys change, so hotkey labels re-render.
+	hotkeyRevision: number;
 }
 
 interface SavedGroupActions {
@@ -34,6 +36,7 @@ interface SavedGroupActions {
 	setPlacement: (id: SavedGroupID, placement: SavedGroupPlacement) => void;
 	removePlacement: (id: SavedGroupID) => void;
 	toggleListCollapsed: () => void;
+	bumpHotkeyRevision: () => void;
 	getSavedGroupOf: (groupID: Identifier) => SavedGroup | undefined;
 	isGroupSaved: (groupID: Identifier) => boolean;
 }
@@ -61,6 +64,7 @@ export const savedGroupStore = useStoreWithActions<SavedGroupStore>(
 		openGroups: {},
 		placements: {},
 		isListCollapsed: false,
+		hotkeyRevision: 0,
 		actions: {
 			hydrate: () => {
 				const links =
@@ -145,6 +149,8 @@ export const savedGroupStore = useStoreWithActions<SavedGroupStore>(
 				savePlacements(placements);
 				set({ placements });
 			},
+			bumpHotkeyRevision: () =>
+				set((state) => ({ hotkeyRevision: state.hotkeyRevision + 1 })),
 			toggleListCollapsed: () => {
 				const isListCollapsed = !get().isListCollapsed;
 				localStorageService.save(

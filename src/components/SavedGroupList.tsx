@@ -3,11 +3,16 @@ import { useApp } from "src/models/PluginContext";
 import { SavedGroup } from "src/models/SavedGroup";
 import { savedGroupStore } from "src/stores/SavedGroupStore";
 import { savedGroupManager } from "src/services/SavedGroups";
+import {
+	getSetHotkeyTitle,
+	openSavedGroupHotkeySettings,
+} from "src/services/SavedGroupCommands";
 import { addColorOptionsToMenu } from "src/services/Customization";
 import { createVTMenu } from "src/services/Menu";
 import { IconSelectionModal } from "src/views/IconSelectionModal";
 import { CssClasses, toClassName } from "src/utils/CssClasses";
 import { IconButton } from "./IconButton";
+import { SavedGroupHotkey } from "./SavedGroupHotkey";
 import { Icon } from "./Icon";
 
 const SavedGroupItem = (props: { savedGroup: SavedGroup }) => {
@@ -48,6 +53,12 @@ const SavedGroupItem = (props: { savedGroup: SavedGroup }) => {
 						() => void savedGroupManager.setSavedGroupIcon(id, undefined)
 					).open();
 				})
+		);
+		menu.addItem((item) =>
+			item
+				.setSection("hotkey")
+				.setTitle(getSetHotkeyTitle(app, id))
+				.onClick(() => openSavedGroupHotkeySettings(app, savedGroup))
 		);
 		menu.addItem((item) =>
 			item
@@ -98,6 +109,7 @@ const SavedGroupItem = (props: { savedGroup: SavedGroup }) => {
 						tooltip="Delete saved group"
 						onClick={remove}
 					/>
+					<SavedGroupHotkey savedGroupID={id} />
 					<span className="tree-item-flair">{count}</span>
 				</div>
 			</div>
